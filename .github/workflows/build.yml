@@ -25,7 +25,7 @@ jobs:
         Compress-Archive -Path dist\* -DestinationPath ProFuel.zip -Force
         
     - name: Upload artifact
-      uses: actions/upload-artifact@v2  # v3 yerine v2
+      uses: actions/upload-artifact@latest  # v3 yerine latest
       with:
         name: ProFuel
         path: dist/ProFuel.zip
