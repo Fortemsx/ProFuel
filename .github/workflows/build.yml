@@ -1,18 +1,26 @@
 name: Build ProFuel Executable
 
-on: [push]
+on: 
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
 
 jobs:
   build:
     runs-on: windows-latest
     
     steps:
-    - uses: actions/checkout@v3
+    - name: Checkout code
+      uses: actions/checkout@v4
     
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
-        python-version: '3.9'
+        python-version: '3.11'
     
     - name: Install dependencies
       run: |
@@ -22,10 +30,13 @@ jobs:
     - name: Build executable
       run: |
         pyinstaller --onefile --windowed --name ProFuel --add-data "yakit_takip.db;." yakit_takip.py
-        Compress-Archive -Path dist\* -DestinationPath ProFuel.zip -Force
+        7z a ProFuel.zip .\dist\ProFuel.exe
         
     - name: Upload artifact
-      uses: actions/upload-artifact@v2
+      uses: actions/upload-artifact@v4
       with:
         name: ProFuel
-        path: dist/ProFuel.zip
+        path: |
+          ProFuel.zip
+          yakit_takip.db
+        retention-days: 5
