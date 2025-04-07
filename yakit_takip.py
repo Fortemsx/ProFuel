@@ -322,7 +322,7 @@ class YakıtTakipUygulaması:
         # Tarih
         ttk.Label(frame, text="Tarih:").grid(row=3, column=0, sticky="w", pady=5)
         self.yakit_tarih_entry = ttk.Entry(frame)
-        self.yakit_tarih_entry.insert(0, datetime.now().strftime("%Y-%m-%d %H:%M"))
+        self.yakit_tarih_entry.insert(0, datetime.now().strftime("%d-%m-%Y %H:%M"))
         self.yakit_tarih_entry.grid(row=3, column=1, padx=10, pady=5, sticky="ew")
         
         # Notlar
@@ -368,7 +368,7 @@ class YakıtTakipUygulaması:
         # Tarih
         ttk.Label(frame, text="Tarih:").grid(row=1, column=0, sticky="w", pady=5)
         self.depo_tarih_entry = ttk.Entry(frame)
-        self.depo_tarih_entry.insert(0, datetime.now().strftime("%Y-%m-%d %H:%M"))
+        self.depo_tarih_entry.insert(0, datetime.now().strftime("%d-%m-%Y %H:%M"))
         self.depo_tarih_entry.grid(row=1, column=1, padx=10, pady=5, sticky="ew")
         
         # Notlar
@@ -604,7 +604,7 @@ class YakıtTakipUygulaması:
         # Form alanları
         ttk.Label(form_frame, text="Tarih:").grid(row=0, column=0, sticky="w", pady=5)
         self.bakim_tarih_entry = ttk.Entry(form_frame)
-        self.bakim_tarih_entry.insert(0, datetime.now().strftime("%Y-%m-%d"))
+        self.bakim_tarih_entry.insert(0, datetime.now().strftime("%d-%m-%Y"))
         self.bakim_tarih_entry.grid(row=0, column=1, padx=10, pady=5, sticky="ew")
         
         ttk.Label(form_frame, text="Saat:").grid(row=1, column=0, sticky="w", pady=5)
@@ -746,7 +746,7 @@ class YakıtTakipUygulaması:
     def rapor_ay_combobox_guncelle(self):
         """Rapor ay combobox'ını günceller"""
         try:
-            self.cursor.execute("SELECT DISTINCT strftime('%Y-%m', tarih) FROM yakit_kayitlari ORDER BY tarih DESC")
+            self.cursor.execute("SELECT DISTINCT strftime('%m-%Y', tarih) FROM yakit_kayitlari ORDER BY tarih DESC")
             aylar = ["Tüm Aylar"] + [ay[0] for ay in self.cursor.fetchall()]
             self.rapor_ay_combobox['values'] = aylar
             if aylar:
@@ -868,7 +868,7 @@ class YakıtTakipUygulaması:
             
             # Tarih kontrolü
             try:
-                datetime.strptime(tarih, "%Y-%m-%d")
+                datetime.strptime(tarih, "%d-%m-%Y")
             except ValueError:
                 raise ValueError("Tarih formatı yanlış! Örnek: 2023-01-15")
                 
@@ -899,7 +899,7 @@ class YakıtTakipUygulaması:
             
             # Formu temizle
             self.bakim_tarih_entry.delete(0, tk.END)
-            self.bakim_tarih_entry.insert(0, datetime.now().strftime("%Y-%m-%d"))
+            self.bakim_tarih_entry.insert(0, datetime.now().strftime("%d-%m-%Y"))
             self.bakim_saat_entry.delete(0, tk.END)
             self.bakim_saat_entry.insert(0, datetime.now().strftime("%H:%M"))
             self.bakim_ariza_entry.delete(0, tk.END)
@@ -1195,7 +1195,7 @@ class YakıtTakipUygulaması:
             
             if muayene_tarihi:
                 try:
-                    muayene_tarihi_dt = datetime.strptime(muayene_tarihi, "%Y-%m-%d").date()
+                    muayene_tarihi_dt = datetime.strptime(muayene_tarihi, "%d-%m-%Y").date()
                     if muayene_tarihi_dt < today:
                         uyarilar.append(f"Muayene tarihi geçmiş: {muayene_tarihi}")
                     elif (muayene_tarihi_dt - today).days <= 30:
@@ -1205,7 +1205,7 @@ class YakıtTakipUygulaması:
                     
             if bakim_tarihi:
                 try:
-                    bakim_tarihi_dt = datetime.strptime(bakim_tarihi, "%Y-%m-%d").date()
+                    bakim_tarihi_dt = datetime.strptime(bakim_tarihi, "%d-%m-%Y").date()
                     if bakim_tarihi_dt < today:
                         uyarilar.append(f"Bakım tarihi geçmiş: {bakim_tarihi}")
                     elif (bakim_tarihi_dt - today).days <= 30:
@@ -1254,13 +1254,13 @@ class YakıtTakipUygulaması:
             # Tarih formatlarını kontrol et
             if muayene_tarihi:
                 try:
-                    datetime.strptime(muayene_tarihi, "%Y-%m-%d")
+                    datetime.strptime(muayene_tarihi, "%d-%m-%Y")
                 except ValueError:
                     raise ValueError("Muayene tarihi formatı yanlış! Örnek: 2023-01-15")
                     
             if bakim_tarihi:
                 try:
-                    datetime.strptime(bakim_tarihi, "%Y-%m-%d")
+                    datetime.strptime(bakim_tarihi, "%d-%m-%Y")
                 except ValueError:
                     raise ValueError("Bakım tarihi formatı yanlış! Örnek: 2023-01-15")
             
@@ -1312,7 +1312,7 @@ class YakıtTakipUygulaması:
             
             # Tarih formatını kontrol et
             try:
-                datetime.strptime(tarih, "%Y-%m-%d %H:%M")
+                datetime.strptime(tarih, "%d-%m-%Y %H:%M")
             except ValueError:
                 raise ValueError("Tarih formatı yanlış! Örnek: 2023-01-15 14:30")
             
@@ -1342,7 +1342,7 @@ class YakıtTakipUygulaması:
             self.yakit_miktar_entry.delete(0, tk.END)
             self.yakit_not_entry.delete(0, tk.END)
             self.yakit_tarih_entry.delete(0, tk.END)
-            self.yakit_tarih_entry.insert(0, datetime.now().strftime("%Y-%m-%d %H:%M"))
+            self.yakit_tarih_entry.insert(0, datetime.now().strftime("%d-%m-%Y %H:%M"))
             
             # Listeleri güncelle
             self.yakit_kayitlarini_yukle()
@@ -1434,7 +1434,7 @@ class YakıtTakipUygulaması:
             
             # Tarih formatını kontrol et
             try:
-                datetime.strptime(tarih, "%Y-%m-%d %H:%M")
+                datetime.strptime(tarih, "%d-%m-%Y %H:%M")
             except ValueError:
                 raise ValueError("Tarih formatı yanlış! Örnek: 2023-01-15 14:30")
             
@@ -1457,7 +1457,7 @@ class YakıtTakipUygulaması:
             self.depo_miktar_entry.delete(0, tk.END)
             self.depo_not_entry.delete(0, tk.END)
             self.depo_tarih_entry.delete(0, tk.END)
-            self.depo_tarih_entry.insert(0, datetime.now().strftime("%Y-%m-%d %H:%M"))
+            self.depo_tarih_entry.insert(0, datetime.now().strftime("%d-%m-%Y %H:%M"))
             
             # Listeleri güncelle
             self.depo_kayitlarini_yukle()
@@ -1528,7 +1528,7 @@ class YakıtTakipUygulaması:
         # Ayı filtrele
         ay_kosulu = ""
         if ay and ay != "Tüm Aylar":
-            ay_kosulu = f"AND strftime('%Y-%m', y.tarih) = '{ay}'"
+            ay_kosulu = f"AND strftime('%m-%Y', y.tarih) = '{ay}'"
         
         try:
             # Rapor tablosunu güncelle
@@ -1590,7 +1590,7 @@ class YakıtTakipUygulaması:
 
             # 2. AYLIK ORTALAMALAR (L/100km)
             self.cursor.execute('''
-            SELECT strftime('%Y-%m', tarih) as ay,
+            SELECT strftime('%m-%Y', tarih) as ay,
                    MIN(km) as bas_km,
                    MAX(km) as son_km,
                    SUM(yakit_miktari) as yakit
@@ -1670,7 +1670,7 @@ class YakıtTakipUygulaması:
                 return
             
             # Verileri işle
-            tarihler = [datetime.strptime(row[0], "%Y-%m-%d %H:%M") for row in veriler]
+            tarihler = [datetime.strptime(row[0], "%d-%m-%Y %H:%M") for row in veriler]
             kmler = [row[1] for row in veriler]
             yakitlar = [row[2] for row in veriler]
             
@@ -1739,7 +1739,7 @@ class YakıtTakipUygulaması:
                 defaultextension=".db",
                 filetypes=[("Database files", "*.db"), ("All files", "*.*")],
                 title="Yedek Dosyasını Kaydet",
-                initialfile=f"yakit_takip_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
+                initialfile=f"yakit_takip_backup_{datetime.now().strftime('%d%m%Y_%H%M%S')}.db"
             )
             
             if not backup_path:
@@ -1835,7 +1835,7 @@ class YakıtTakipUygulaması:
                 defaultextension=".xlsx",
                 filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")],
                 title="Raporu Kaydet",
-                initialfile=f"yakit_raporu_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+                initialfile=f"yakit_raporu_{datetime.now().strftime('%d%m%Y_%H%M%S')}.xlsx"
             )
             
             if file_path:
