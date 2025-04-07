@@ -179,15 +179,20 @@ class YakıtTakipUygulaması:
     def create_menu(self):
         """Menü çubuğunu oluşturur"""
         menubar = tk.Menu(self.root)
-        
+    
         # Dosya menüsü
         file_menu = tk.Menu(menubar, tearoff=0)
         file_menu.add_command(label="Yedek Al", command=self.backup_database)
         if HAS_EXCEL:
-            file_menu.add_command(label="Excel Raporu", command=self.generate_excel_report)
+            excel_menu = tk.Menu(file_menu, tearoff=0)
+            excel_menu.add_command(label="Yakıt Raporu", command=self.generate_excel_report)
+            excel_menu.add_command(label="Bakım Raporu", command=self.generate_bakim_excel_report)
+            file_menu.add_cascade(label="Excel Raporları", menu=excel_menu)
         file_menu.add_separator()
         file_menu.add_command(label="Çıkış", command=self.on_closing)
         menubar.add_cascade(label="Dosya", menu=file_menu)
+    
+    # ... diğer menü öğeleri aynı kalacak ...
         
         # Araçlar menüsü
         tools_menu = tk.Menu(menubar, tearoff=0)
@@ -1851,6 +1856,94 @@ class YakıtTakipUygulaması:
                 
         except Exception as e:
             self.show_error(f"Rapor oluşturulurken hata: {str(e)}")
+            
+    def generate_bakim_excel_report(self):
+        """Bakım ve tamirat Excel raporu oluşturur"""
+        if not HAS_EXCEL:
+            self.show_error("Excel raporlama özelliği devre dışı (openpyxl kurulu değil)")
+            return
+        
+        try:
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Bakım Raporu"
+        
+            # Başlıklar
+            headers = [
+                "Tarih", "Saat", "Plaka", "Tespit Edilen Arıza", 
+                "Yapılan İşlem", "Parça Ücreti", "İşçilik Ücreti", 
+                "Toplam Tutar", "Notlar"
+            ]
+            ws.append(headers)
+        
+            # Başlık stilini ayarla
+            bold_font = Font(bold=True)
+            for cell in ws[1]:
+                cell.font = bold_font
+        
+            # Verileri al
+            self.cursor.execute('''
+            SELECT b.tarih, b.saat, a.plaka, b.tespit_edilen_ariza, 
+                   b.yapilan_islem, b.parca_ucreti, b.iscilik_ucreti,
+                   b.toplam_tutar, b.notlar
+            FROM bakim_tamirat b
+            JOIN araclar a ON b.arac_id = a.arac_id
+            ORDER BY b.tarih DESC, b.saat DESC
+            ''')
+        
+            # Satırları ekle
+            for row in self.cursor.fetchall():
+                ws.append(row)
+        
+            # Sütun genişliklerini ayarla
+            for col in ws.columns:
+                max_length = 0
+                column = col[0].column_letter
+            
+                for cell in col:
+                    try:
+                        value = str(cell.value) if cell.value else ""
+                        if len(value) > max_length:
+                            max_length = len(value)
+                    except:
+                        pass
+            
+                adjusted_width = (max_length + 2) * 1.2
+                ws.column_dimensions[column].width = adjusted_width
+        
+            # Toplam maliyet satırı ekle
+            self.cursor.execute("SELECT SUM(toplam_tutar) FROM bakim_tamirat")
+            toplam_tutar = self.cursor.fetchone()[0] or 0
+        
+            ws.append([])  # Boş satır
+            ws.append(["TOPLAM MALİYET", "", "", "", "", "", "", toplam_tutar, ""])
+        
+            # Kaydetme iletişim kutusu
+            desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
+            if not os.path.exists(desktop_path):
+                desktop_path = os.path.dirname(self.db_path)
+        
+            file_path = filedialog.asksaveasfilename(
+                initialdir=desktop_path,
+                defaultextension=".xlsx",
+                filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")],
+                title="Bakım Raporunu Kaydet",
+                initialfile=f"bakim_raporu_{datetime.now().strftime('%d%m%Y_%H%M%S')}.xlsx"
+            )
+        
+            if file_path:
+                wb.save(file_path)
+                self.show_success(f"Bakım raporu başarıyla oluşturuldu:\n{file_path}")
+            
+                # Raporu aç (Windows için)
+                if sys.platform == "win32":
+                    try:
+                        os.startfile(file_path)
+                    except:
+                        pass
+            
+        except Exception as e:
+            self.show_error(f"Bakım raporu oluşturulurken hata: {str(e)}")        
 
     def show_help(self):
         """Yardım bilgisi gösterir"""
