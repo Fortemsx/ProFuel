@@ -1,0 +1,32 @@
+name: Build ProFuel Executable
+
+on: [push]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v2
+
+    - name: Set up Python
+      uses: actions/setup-python@v2
+      with:
+        python-version: '3.9'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Build executable
+      run: |
+        pyinstaller --onefile --windowed --name ProFuel yakit_takip.py
+        Compress-Archive -Path dist\* -DestinationPath ProFuel.zip -Force
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v2
+      with:
+        name: ProFuel  # Artifact ismi
+        path: ProFuel.zip  # Oluşturduğumuz zip dosyasının doğru yolu
