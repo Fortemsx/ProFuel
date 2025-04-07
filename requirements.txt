@@ -1,0 +1,5 @@
+matplotlib
+pillow
+openpyxl
+sv-ttk
+pyinstaller
