@@ -74,7 +74,16 @@ class YakıtTakipUygulaması:
 
     def setup_database(self):
         """Veritabanı bağlantısını kurar"""
-        self.db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "yakit_takip.db")
+        # Uygulamanın çalıştığı dizini bul
+        if getattr(sys, 'frozen', False):
+            # EXE olarak çalışıyorsa
+            application_path = os.path.dirname(sys.executable)
+        else:
+            # Script olarak çalışıyorsa
+            application_path = os.path.dirname(os.path.abspath(__file__))
+    
+        self.db_path = os.path.join(application_path, "yakit_takip.db")
+    
         try:
             self.conn = sqlite3.connect(self.db_path)
             self.cursor = self.conn.cursor()
