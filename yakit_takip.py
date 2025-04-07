@@ -1256,13 +1256,13 @@ class YakıtTakipUygulaması:
                 try:
                     datetime.strptime(muayene_tarihi, "%d-%m-%Y")
                 except ValueError:
-                    raise ValueError("Muayene tarihi formatı yanlış! Örnek: 2023-01-15")
+                    raise ValueError("Muayene tarihi formatı yanlış! Örnek: 15-01-2025")
                     
             if bakim_tarihi:
                 try:
                     datetime.strptime(bakim_tarihi, "%d-%m-%Y")
                 except ValueError:
-                    raise ValueError("Bakım tarihi formatı yanlış! Örnek: 2023-01-15")
+                    raise ValueError("Bakım tarihi formatı yanlış! Örnek: 15-01-2025")
             
             # Model yılını kontrol et
             model_yili = int(model_yili) if model_yili else None
