@@ -5,28 +5,27 @@ on: [push]
 jobs:
   build:
     runs-on: windows-latest
-
+    
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v2
-
+    - uses: actions/checkout@v3  # v2 yerine v3 kullanıyoruz
+    
     - name: Set up Python
-      uses: actions/setup-python@v2
+      uses: actions/setup-python@v4  # v2 yerine v4
       with:
         python-version: '3.9'
-
+    
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-
+        
     - name: Build executable
       run: |
-        pyinstaller --onefile --windowed --name ProFuel yakit_takip.py
+        pyinstaller --onefile --windowed --name ProFuel --add-data "yakit_takip.db;." yakit_takip.py
         Compress-Archive -Path dist\* -DestinationPath ProFuel.zip -Force
-
+        
     - name: Upload artifact
-      uses: actions/upload-artifact@v2
+      uses: actions/upload-artifact@v3  # v2 yerine v3
       with:
-        name: ProFuel  # Artifact ismi
-        path: ProFuel.zip  # Oluşturduğumuz zip dosyasının doğru yolu
+        name: ProFuel
+        path: dist/ProFuel.zip
