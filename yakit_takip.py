@@ -28,43 +28,20 @@ class AraçTakipUygulaması:
         """Veritabanı tablolarını oluşturur veya bağlantı kurar"""
         self.db_name = "arac_takip.db"
         
+        # Veritabanı yolunu belirle (EXE ve normal mod için)
+        if getattr(sys, 'frozen', False):
+            application_path = os.path.dirname(sys.executable)
+        else:
+            application_path = os.path.dirname(os.path.abspath(__file__))
+        
+        self.db_path = os.path.join(application_path, self.db_name)
+        
         try:
-            # EXE modunda mı çalışıyoruz kontrol et
-            if getattr(sys, 'frozen', False):
-                # EXE modunda - portable çözüm
-                if hasattr(sys, '_MEIPASS'):
-                    # PyInstaller ile oluşturulmuşsa
-                    application_path = os.path.dirname(sys.executable)
-                else:
-                    # Diğer EXE durumları
-                    application_path = os.path.dirname(sys.argv[0])
-            else:
-                # Normal Python modunda
-                application_path = os.path.dirname(os.path.abspath(__file__))
-            
-            # Eğer çalışma dizininde yazma izni yoksa, kullanıcının veri dizinini kullan
-            test_file = os.path.join(application_path, 'test_write.tmp')
-            try:
-                with open(test_file, 'w') as f:
-                    f.write('test')
-                os.remove(test_file)
-            except (IOError, OSError):
-                # Yazma izni yok, alternatif dizin kullan
-                if os.name == 'nt':  # Windows
-                    application_path = os.path.join(os.getenv('APPDATA'), 'AracTakipUygulamasi')
-                else:  # Linux/Mac
-                    application_path = os.path.join(os.path.expanduser('~'), '.aractakip')
-                
-                # Dizini oluştur
-                os.makedirs(application_path, exist_ok=True)
-            
-            self.db_path = os.path.join(application_path, self.db_name)
-            
             self.conn = sqlite3.connect(self.db_path)
-            self.conn.create_function("date", 1, lambda x: datetime.strptime(x, "%d.%m.%Y").date())
-            self.cursor = self.conn.cursor()
+            self.conn.execute("PRAGMA foreign_keys = ON")  # Foreign key desteğini aç
+            self.cursor = self.cursor = self.conn.cursor()
             
-            # Tablo oluşturma kodları aynı kalacak...
+            # Tabloları oluştur (IF NOT EXISTS ile)
             self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS vehicles (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -74,38 +51,99 @@ class AraçTakipUygulaması:
                 driver TEXT
             )""")
             
-            # ... diğer tablo oluşturma sorguları ...
+            self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS fuel_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                vehicle_id INTEGER NOT NULL,
+                date TEXT NOT NULL,
+                km INTEGER NOT NULL,
+                amount REAL NOT NULL,
+                price REAL NOT NULL,
+                total REAL NOT NULL,
+                FOREIGN KEY (vehicle_id) REFERENCES vehicles(id)
+            )""")
+            
+            # EKSİK OLAN fuel_tank TABLOSUNU EKLEYİN
+            self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS fuel_tank (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                amount REAL NOT NULL,
+                price REAL NOT NULL,
+                total REAL NOT NULL,
+                transaction_type TEXT NOT NULL CHECK(transaction_type IN ('IN', 'OUT')),
+                notes TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )""")
+            
+            self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS maintenance (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                vehicle_id INTEGER NOT NULL,
+                date TEXT NOT NULL,
+                km INTEGER NOT NULL,
+                fault TEXT,
+                repair TEXT,
+                labor_cost REAL DEFAULT 0,
+                material_cost REAL DEFAULT 0,
+                FOREIGN KEY (vehicle_id) REFERENCES vehicles(id)
+            )""")
+            
+            self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS inspections (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                vehicle_id INTEGER NOT NULL,
+                date TEXT NOT NULL,
+                km INTEGER NOT NULL,
+                next_inspection_date TEXT,
+                next_maintenance_date TEXT,
+                next_maintenance_km INTEGER,
+                FOREIGN KEY (vehicle_id) REFERENCES vehicles(id)
+            )""")
             
             self.conn.commit()
+            
+            # Mevcut veritabanında tabloların varlığını kontrol et
+            self.cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            tables = self.cursor.fetchall()
+            print("Mevcut tablolar:", tables)  # Debug için
             
             # Yakıt fiyatı ve depo durumu için değişkenler
             self.current_fuel_price = 20.0  # Varsayılan fiyat
             self.current_fuel_level = 0.0  # Litre cinsinden
             
-            # Son yakıt fiyatını al
-            self.cursor.execute("SELECT price FROM fuel_tank WHERE transaction_type='IN' ORDER BY date DESC LIMIT 1")
-            result = self.cursor.fetchone()
-            if result:
-                self.current_fuel_price = float(result[0])
-                
+            # Son yakıt fiyatını al (tablo yoksa hata vermesin diye try-catch)
+            try:
+                self.cursor.execute("SELECT price FROM fuel_tank WHERE transaction_type='IN' ORDER BY date DESC LIMIT 1")
+                result = self.cursor.fetchone()
+                if result:
+                    self.current_fuel_price = float(result[0])
+            except sqlite3.OperationalError as e:
+                print("fuel_tank tablosunda fiyat sorgulanırken hata:", e)
+                self.current_fuel_price = 20.0  # Varsayılan değer
+            
             # Depodaki mevcut yakıt miktarını hesapla
-            self.cursor.execute("""
-            SELECT SUM(CASE 
-                WHEN transaction_type='IN' THEN amount 
-                ELSE -amount 
-            END) FROM fuel_tank
-            """)
-            result = self.cursor.fetchone()
-            self.current_fuel_level = float(result[0]) if result and result[0] else 0.0
+            try:
+                self.cursor.execute("""
+                SELECT SUM(CASE 
+                    WHEN transaction_type='IN' THEN amount 
+                    ELSE -amount 
+                END) FROM fuel_tank
+                """)
+                result = self.cursor.fetchone()
+                self.current_fuel_level = float(result[0]) if result and result[0] else 0.0
+            except sqlite3.OperationalError as e:
+                print("fuel_tank tablosunda seviye sorgulanırken hata:", e)
+                self.current_fuel_level = 0.0
                 
         except sqlite3.Error as e:
-            messagebox.showerror("Veritabanı Hatası", f"Veritabanı bağlantısı kurulamadı: {str(e)}")
+            error_msg = f"Veritabanı bağlantısı kurulamadı: {str(e)}"
+            print(error_msg)  # Konsola da yaz
+            messagebox.showerror("Veritabanı Hatası", error_msg)
             self.root.destroy()
             raise
-        except Exception as e:
-            messagebox.showerror("Hata", f"Veritabanı başlatılırken beklenmeyen hata: {str(e)}")
-            self.root.destroy()
-            raise
+
+
 
 
     def setup_styles(self):
