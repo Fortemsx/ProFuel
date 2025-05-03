@@ -1453,7 +1453,7 @@ class AraçTakipUygulaması:
         next_maintenance_km = self.next_maintenance_km_entry.get().strip()
         next_maintenance_date = self.next_maintenance_date_entry.get_date().strftime("%d.%m.%Y")
         
-        if not vehicle or not km or not date or not next_maintenance_km or not next_maintenance_date:
+        if not all([vehicle, km, date, next_maintenance_km, next_maintenance_date]):
             messagebox.showerror("Hata", "Lütfen tüm alanları doldurun!")
             return
         
@@ -1464,38 +1464,44 @@ class AraçTakipUygulaması:
             km = int(km)
             next_maintenance_km = int(next_maintenance_km)
             
-            selected = self.inspection_tree.selection()
-            if selected:  # Update
-                record_id = self.inspection_tree.item(selected[0])['values'][0]
-                self.cursor.execute(
-                    """UPDATE inspections 
-                    SET vehicle_id=?, date=?, km=?, next_maintenance_km=?, next_maintenance_date=?
-                    WHERE id=?""",
-                    (vehicle_id, date, km, next_maintenance_km, next_maintenance_date, record_id))
-                messagebox.showinfo("Başarılı", "Periyodik bakım kaydı güncellendi!")
-            else:  # Insert
-                self.cursor.execute(
-                    """INSERT INTO inspections 
-                    (vehicle_id, date, km, next_maintenance_km, next_maintenance_date) 
-                    VALUES (?, ?, ?, ?, ?)""",
-                    (vehicle_id, date, km, next_maintenance_km, next_maintenance_date))
-                messagebox.showinfo("Başarılı", "Periyodik bakım kaydı eklendi!")
+            # Mevcut kaydı kontrol et
+            self.cursor.execute("""
+            SELECT id FROM inspections 
+            WHERE vehicle_id=? AND date=?
+            """, (vehicle_id, date))
+            existing_record = self.cursor.fetchone()
             
-            # Update vehicle km
+            if existing_record:  # Güncelleme
+                self.cursor.execute("""
+                UPDATE inspections 
+                SET km=?, next_maintenance_km=?, next_maintenance_date=?
+                WHERE id=?
+                """, (km, next_maintenance_km, next_maintenance_date, existing_record[0]))
+                message = "Periyodik bakım kaydı güncellendi!"
+            else:  # Yeni kayıt
+                self.cursor.execute("""
+                INSERT INTO inspections 
+                (vehicle_id, date, km, next_maintenance_km, next_maintenance_date) 
+                VALUES (?, ?, ?, ?, ?)
+                """, (vehicle_id, date, km, next_maintenance_km, next_maintenance_date))
+                message = "Periyodik bakım kaydı eklendi!"
+            
+            # Aracın KM'sini güncelle
             self.cursor.execute("UPDATE vehicles SET km=? WHERE id=?", (km, vehicle_id))
             
             self.conn.commit()
             self.load_inspection_records()
             self.load_vehicles()
             
-            # Clear form
+            messagebox.showinfo("Başarılı", message)
             self.clear_periodic_maintenance_form()
             
         except ValueError:
-            messagebox.showerror("Hata", "Geçersiz sayısal değer!")
+            messagebox.showerror("Hata", "KM değerleri sayısal olmalıdır!")
         except Exception as e:
             messagebox.showerror("Hata", f"Kayıt sırasında hata: {str(e)}")
             self.conn.rollback()
+
 
     def delete_vehicle(self):
         selected = self.vehicle_tree.selection()
@@ -1866,42 +1872,38 @@ class AraçTakipUygulaması:
             messagebox.showerror("Hata", f"Maliyet hesaplanırken hata: {str(e)}")
 
     def check_notifications(self):
-        today = datetime.now().date()
-        sixty_days_later = today + timedelta(days=60)
+        try:
+            today = datetime.now().date()
+            
+            # Bakım uyarıları (KM bazlı) - Daha hassas kontrol
+            self.cursor.execute("""
+            SELECT COUNT(*) 
+            FROM inspections i
+            JOIN vehicles v ON i.vehicle_id = v.id
+            WHERE i.next_maintenance_km IS NOT NULL 
+            AND v.km >= i.next_maintenance_km - 1000
+            """)
+            self.maintenance_notification_count = self.cursor.fetchone()[0] or 0
+            
+            # Muayene uyarıları (tarih bazlı)
+            self.cursor.execute("""
+            SELECT COUNT(*) 
+            FROM inspections i
+            WHERE i.next_inspection_date IS NOT NULL
+            AND date(i.next_inspection_date) <= date(?, '+60 days')
+            """, (today.strftime("%Y-%m-%d"),))
+            self.inspection_notification_count = self.cursor.fetchone()[0] or 0
+            
+            # Menüyü güncelle
+            self.update_notification_menu()
+            
+        except Exception as e:
+            print("Uyarı kontrolü sırasında hata:", str(e))
         
-        # Bakım uyarıları (KM bazlı)
-        self.cursor.execute("""
-        SELECT v.plate, i.next_maintenance_km, v.km 
-        FROM inspections i
-        JOIN vehicles v ON i.vehicle_id = v.id
-        WHERE i.next_maintenance_km IS NOT NULL AND v.km >= i.next_maintenance_km - 1000
-        ORDER BY v.km - i.next_maintenance_km DESC
-        """)
-        maintenance_alerts = self.cursor.fetchall()
-        self.maintenance_notification_count = len(maintenance_alerts)
-        
-        # Muayene uyarıları (tarih bazlı)
-        self.cursor.execute("""
-        SELECT v.plate, i.next_inspection_date 
-        FROM inspections i
-        JOIN vehicles v ON i.vehicle_id = v.id
-        WHERE i.next_inspection_date IS NOT NULL
-        ORDER BY i.next_inspection_date
-        """)
-        inspection_alerts = []
-        for alert in self.cursor.fetchall():
-            try:
-                next_date = datetime.strptime(alert[1], "%d.%m.%Y").date()
-                if next_date <= sixty_days_later:
-                    inspection_alerts.append(alert)
-            except ValueError:
-                continue
-        
-        self.inspection_notification_count = len(inspection_alerts)
-        
-        # Menüyü güncelle
-        self.update_notification_menu()
-        self.root.after(60000, self.check_notifications)  # Her 1 dakikada bir kontrol et
+        finally:
+            # 1 dakika sonra tekrar kontrol et
+            self.root.after(60000, self.check_notifications)
+
 
     def update_fuel_level(self):
         """Depodaki yakıt seviyesini günceller"""
@@ -1949,54 +1951,76 @@ class AraçTakipUygulaması:
                 foreground="black")
 
     def show_maintenance_notifications(self):
-        self.cursor.execute("""
-        SELECT v.plate, i.next_maintenance_km, v.km, 
-               v.km - i.next_maintenance_km as km_diff
-        FROM inspections i
-        JOIN vehicles v ON i.vehicle_id = v.id
-        WHERE i.next_maintenance_km IS NOT NULL AND v.km >= i.next_maintenance_km - 1000
-        ORDER BY km_diff DESC
-        """)
-        alerts = self.cursor.fetchall()
-        
-        if not alerts:
-            messagebox.showinfo("Bilgi", "Bakım gerektiren araç bulunamadı!")
-            return
-        
-        alert_window = tk.Toplevel(self.root)
-        alert_window.title("Bakım Uyarıları")
-        alert_window.geometry("600x400")
-        
-        columns = ("Plaka", "Bakım KM", "Mevcut KM", "KM Farkı")
-        tree = ttk.Treeview(alert_window, columns=columns, show="headings")
-        
-        for col in columns:
-            tree.heading(col, text=col)
-            tree.column(col, width=120, anchor="center")
-        
-        scrollbar = ttk.Scrollbar(alert_window, orient="vertical", command=tree.yview)
-        tree.configure(yscrollcommand=scrollbar.set)
-        
-        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        
-        for i, alert in enumerate(alerts):
-            km_diff = alert[3]
-            if km_diff >= 0:
-                km_diff_str = f"+{km_diff} (GEÇMİŞ)"
-            else:
-                km_diff_str = f"{km_diff} (KALAN)"
+        try:
+            self.cursor.execute("""
+            SELECT v.plate, i.next_maintenance_km, v.km, 
+                   (v.km - i.next_maintenance_km) as km_diff,
+                   i.next_maintenance_date
+            FROM inspections i
+            JOIN vehicles v ON i.vehicle_id = v.id
+            WHERE i.next_maintenance_km IS NOT NULL 
+            ORDER BY km_diff DESC
+            """)
+            alerts = self.cursor.fetchall()
             
-            tree.insert("", tk.END, values=(
-                alert[0], alert[1], alert[2], km_diff_str
-            ))
-        
-        ttk.Button(
-            alert_window, 
-            text="Kapat", 
-            command=alert_window.destroy,
-            style='Primary.TButton'
-        ).pack(pady=10)
+            if not alerts:
+                messagebox.showinfo("Bilgi", "Bakım gerektiren araç bulunamadı!")
+                return
+            
+            alert_window = tk.Toplevel(self.root)
+            alert_window.title("Bakım Uyarıları (KM Bazlı)")
+            alert_window.geometry("800x600")
+            
+            columns = ("Plaka", "Bakım KM", "Mevcut KM", "KM Farkı", "Sonraki Bakım Tarihi")
+            tree = ttk.Treeview(alert_window, columns=columns, show="headings")
+            
+            for col in columns:
+                tree.heading(col, text=col, anchor="center")
+                tree.column(col, width=120, anchor="center")
+            
+            scrollbar = ttk.Scrollbar(alert_window, orient="vertical", command=tree.yview)
+            tree.configure(yscrollcommand=scrollbar.set)
+            
+            tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+            
+            for alert in alerts:
+                km_diff = alert[3]
+                if km_diff >= 0:
+                    km_diff_str = f"+{km_diff} (GEÇMİŞ)"
+                else:
+                    km_diff_str = f"{km_diff} (KALAN)"
+                
+                next_date = alert[4] if alert[4] else "Belirtilmemiş"
+                
+                tree.insert("", tk.END, values=(
+                    alert[0],  # Plaka
+                    alert[1],  # Bakım KM
+                    alert[2],  # Mevcut KM
+                    km_diff_str,
+                    next_date
+                ))
+            
+            # Bilgi etiketi ekleyin
+            info_label = ttk.Label(
+                alert_window,
+                text="Pozitif KM Farkı: Bakım gecikmiş | Negatif KM Farkı: Bakıma kalan KM",
+                font=('Segoe UI', 10, 'italic'),
+                foreground="#666666"
+            )
+            info_label.pack(pady=5)
+            
+            ttk.Button(
+                alert_window, 
+                text="Kapat", 
+                command=alert_window.destroy,
+                style='Primary.TButton'
+            ).pack(pady=10)
+            
+        except Exception as e:
+            messagebox.showerror("Hata", f"Bakım uyarıları gösterilirken hata oluştu: {str(e)}")
+            print("Hata detayı:", str(e))  # Konsola hata detayını yazdır
+
 
     def show_inspection_notifications(self):
         today = datetime.now().date()
