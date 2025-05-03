@@ -4,14 +4,14 @@ from datetime import datetime, timedelta
 import sqlite3
 import os
 import sys
-import matplotlib # type: ignore
+import matplotlib
 matplotlib.use('TkAgg')
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg # type: ignore
-import matplotlib.pyplot as plt # type: ignore # type: ignore
-from tkcalendar import DateEntry # type: ignore
-import openpyxl # type: ignore # type: ignore
-from openpyxl.styles import Font, Alignment, Border, Side, PatternFill # type: ignore
-from openpyxl.utils import get_column_letter # type: ignore
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import matplotlib.pyplot as plt
+from tkcalendar import DateEntry
+import openpyxl
+from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
+from openpyxl.utils import get_column_letter
 
 class AraçTakipUygulaması:
     def __init__(self, root):
@@ -28,7 +28,6 @@ class AraçTakipUygulaması:
         """Veritabanı tablolarını oluşturur veya bağlantı kurar"""
         self.db_name = "arac_takip.db"
         
-        # Veritabanı yolunu belirle (EXE ve normal mod için)
         if getattr(sys, 'frozen', False):
             application_path = os.path.dirname(sys.executable)
         else:
@@ -38,8 +37,8 @@ class AraçTakipUygulaması:
         
         try:
             self.conn = sqlite3.connect(self.db_path)
-            self.conn.execute("PRAGMA foreign_keys = ON")  # Foreign key desteğini aç
-            self.cursor = self.cursor = self.conn.cursor()
+            self.conn.execute("PRAGMA foreign_keys = ON")
+            self.cursor = self.conn.cursor()
             
             # Tabloları oluştur (IF NOT EXISTS ile)
             self.cursor.execute("""
@@ -55,7 +54,7 @@ class AraçTakipUygulaması:
             CREATE TABLE IF NOT EXISTS fuel_records (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 vehicle_id INTEGER NOT NULL,
-                date TEXT NOT NULL,
+                date TEXT NOT NULL,  -- ISO format: YYYY-MM-DD
                 km INTEGER NOT NULL,
                 amount REAL NOT NULL,
                 price REAL NOT NULL,
@@ -63,11 +62,10 @@ class AraçTakipUygulaması:
                 FOREIGN KEY (vehicle_id) REFERENCES vehicles(id)
             )""")
             
-            # EKSİK OLAN fuel_tank TABLOSUNU EKLEYİN
             self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS fuel_tank (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                date TEXT NOT NULL,
+                date TEXT NOT NULL,  -- ISO format: YYYY-MM-DD
                 amount REAL NOT NULL,
                 price REAL NOT NULL,
                 total REAL NOT NULL,
@@ -80,7 +78,7 @@ class AraçTakipUygulaması:
             CREATE TABLE IF NOT EXISTS maintenance (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 vehicle_id INTEGER NOT NULL,
-                date TEXT NOT NULL,
+                date TEXT NOT NULL,  -- ISO format: YYYY-MM-DD
                 km INTEGER NOT NULL,
                 fault TEXT,
                 repair TEXT,
@@ -93,36 +91,28 @@ class AraçTakipUygulaması:
             CREATE TABLE IF NOT EXISTS inspections (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 vehicle_id INTEGER NOT NULL,
-                date TEXT NOT NULL,
+                date TEXT NOT NULL,  -- ISO format: YYYY-MM-DD
                 km INTEGER NOT NULL,
-                next_inspection_date TEXT,
-                next_maintenance_date TEXT,
+                next_inspection_date TEXT,  -- ISO format: YYYY-MM-DD
+                next_maintenance_date TEXT,  -- ISO format: YYYY-MM-DD
                 next_maintenance_km INTEGER,
                 FOREIGN KEY (vehicle_id) REFERENCES vehicles(id)
             )""")
             
             self.conn.commit()
             
-            # Mevcut veritabanında tabloların varlığını kontrol et
-            self.cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-            tables = self.cursor.fetchall()
-            print("Mevcut tablolar:", tables)  # Debug için
-            
             # Yakıt fiyatı ve depo durumu için değişkenler
-            self.current_fuel_price = 20.0  # Varsayılan fiyat
-            self.current_fuel_level = 0.0  # Litre cinsinden
+            self.current_fuel_price = 20.0
+            self.current_fuel_level = 0.0
             
-            # Son yakıt fiyatını al (tablo yoksa hata vermesin diye try-catch)
             try:
                 self.cursor.execute("SELECT price FROM fuel_tank WHERE transaction_type='IN' ORDER BY date DESC LIMIT 1")
                 result = self.cursor.fetchone()
                 if result:
                     self.current_fuel_price = float(result[0])
-            except sqlite3.OperationalError as e:
-                print("fuel_tank tablosunda fiyat sorgulanırken hata:", e)
-                self.current_fuel_price = 20.0  # Varsayılan değer
+            except sqlite3.OperationalError:
+                self.current_fuel_price = 20.0
             
-            # Depodaki mevcut yakıt miktarını hesapla
             try:
                 self.cursor.execute("""
                 SELECT SUM(CASE 
@@ -132,22 +122,15 @@ class AraçTakipUygulaması:
                 """)
                 result = self.cursor.fetchone()
                 self.current_fuel_level = float(result[0]) if result and result[0] else 0.0
-            except sqlite3.OperationalError as e:
-                print("fuel_tank tablosunda seviye sorgulanırken hata:", e)
+            except sqlite3.OperationalError:
                 self.current_fuel_level = 0.0
                 
         except sqlite3.Error as e:
-            error_msg = f"Veritabanı bağlantısı kurulamadı: {str(e)}"
-            print(error_msg)  # Konsola da yaz
-            messagebox.showerror("Veritabanı Hatası", error_msg)
+            messagebox.showerror("Veritabanı Hatası", f"Veritabanı bağlantısı kurulamadı: {str(e)}")
             self.root.destroy()
             raise
 
-
-
-
     def setup_styles(self):
-        # Renk paleti
         self.primary_color = "#2c3e50"
         self.secondary_color = "#3498db"
         self.accent_color = "#e74c3c"
@@ -158,28 +141,23 @@ class AraçTakipUygulaması:
         self.dark_text = "#2c3e50"
         self.light_text = "#ecf0f1"
         
-        # Yazı tipleri
         self.title_font = ('Segoe UI', 12, 'bold')
         self.subtitle_font = ('Segoe UI', 10, 'bold')
         self.normal_font = ('Segoe UI', 9)
         self.small_font = ('Segoe UI', 8)
         
-        # Temel stil ayarları
         self.style = ttk.Style()
         self.style.theme_use('clam')
         
-        # Genel ayarlar
         self.style.configure('.', 
                            background=self.light_bg,
                            foreground=self.dark_text,
                            font=self.normal_font)
         
-        # Frame stilleri
         self.style.configure('TFrame', background=self.light_bg)
         self.style.configure('Header.TFrame', background=self.primary_color)
         self.style.configure('Status.TFrame', background=self.primary_color)
         
-        # Label stilleri
         self.style.configure('TLabel', 
                            background=self.light_bg,
                            foreground=self.dark_text,
@@ -191,7 +169,6 @@ class AraçTakipUygulaması:
                            font=self.subtitle_font,
                            foreground=self.secondary_color)
         
-        # Button stilleri
         self.style.configure('TButton', 
                            font=self.subtitle_font,
                            borderwidth=1,
@@ -219,7 +196,6 @@ class AraçTakipUygulaması:
         self.style.map('Success.TButton',
                       background=[('active', '#27ae60'), ('pressed', '#219653')])
         
-        # Entry stilleri
         self.style.configure('TEntry', 
                            fieldbackground="white",
                            foreground=self.dark_text,
@@ -228,14 +204,12 @@ class AraçTakipUygulaması:
                            bordercolor=self.secondary_color,
                            lightcolor=self.secondary_color)
         
-        # Combobox stilleri
         self.style.configure('TCombobox', 
                            fieldbackground="white",
                            foreground=self.dark_text,
                            selectbackground=self.secondary_color,
                            padding=5)
         
-        # Notebook (Sekme) stilleri
         self.style.configure('TNotebook', background=self.light_bg)
         self.style.configure('TNotebook.Tab', 
                            background=self.lighter_bg,
@@ -246,7 +220,6 @@ class AraçTakipUygulaması:
                       background=[('selected', self.secondary_color)],
                       foreground=[('selected', self.light_text)])
         
-        # Treeview (Tablo) stilleri
         self.style.configure('Treeview', 
                            background="white",
                            foreground=self.dark_text,
@@ -264,13 +237,11 @@ class AraçTakipUygulaması:
                       background=[('selected', self.secondary_color)],
                       foreground=[('selected', self.light_text)])
         
-        # Scrollbar stilleri
         self.style.configure('Vertical.TScrollbar', 
                            background=self.light_bg,
                            arrowcolor=self.secondary_color,
                            troughcolor=self.light_bg)
         
-        # LabelFrame stilleri
         self.style.configure('TLabelframe', 
                            background=self.light_bg,
                            foreground=self.primary_color,
@@ -281,7 +252,6 @@ class AraçTakipUygulaması:
                            foreground=self.primary_color,
                            font=self.subtitle_font)
         
-        # DateEntry stili
         self.style.configure('DateEntry', 
                            fieldbackground="white",
                            foreground=self.dark_text,
@@ -497,11 +467,10 @@ class AraçTakipUygulaması:
         self.fuel_tree.bind("<<TreeviewSelect>>", self.load_fuel_data)
 
     def create_depo_tab(self):
-        """Yakıt Deposu sekmesini oluşturur - Çıkış işlemi kaldırıldı"""
         frame = ttk.Frame(self.notebook)
         self.notebook.add(frame, text="Yakıt Deposu", padding=5)
 
-        # 1. DEPO DURUM PANELİ (Üst kısma ekleyin)
+        # 1. DEPO DURUM PANELİ
         status_frame = ttk.LabelFrame(frame, text="Anlık Depo Durumu", padding=10)
         status_frame.pack(fill=tk.X, padx=10, pady=5)
 
@@ -612,7 +581,6 @@ class AraçTakipUygulaması:
 
         # Başlangıç verilerini yükle
         self.load_depo_records()
-
 
     def create_bakim_tab(self):
         frame = ttk.Frame(self.notebook)
@@ -903,7 +871,7 @@ class AraçTakipUygulaması:
     def load_fuel_records(self):
         self.fuel_tree.delete(*self.fuel_tree.get_children())
         self.cursor.execute("""
-        SELECT f.id, f.date, v.plate, f.km, f.amount, f.price, f.total 
+        SELECT f.id, strftime('%d.%m.%Y', f.date), v.plate, f.km, f.amount, f.price, f.total 
         FROM fuel_records f
         JOIN vehicles v ON f.vehicle_id = v.id
         ORDER BY f.date DESC
@@ -916,54 +884,43 @@ class AraçTakipUygulaması:
     def load_depo_records(self):
         """Depo hareketlerini yükler"""
         try:
-            # Önceki kayıtları temizle
             self.depo_tree.delete(*self.depo_tree.get_children())
             
-            # Veritabanından kayıtları al
             self.cursor.execute("""
             SELECT 
                 id,
-                date,
-                CASE 
-                    WHEN transaction_type='IN' THEN 'Giriş' 
-                    ELSE 'Çıkış' 
-                END as transaction_type,
-                CASE 
-                    WHEN transaction_type='IN' THEN amount 
-                    ELSE -amount 
-                END as signed_amount,
+                strftime('%d.%m.%Y', date),
+                amount,
                 price,
                 total,
                 COALESCE(notes, '')
             FROM fuel_tank
+            WHERE transaction_type='IN'
             ORDER BY date DESC, id DESC
             LIMIT 200
             """)
-            
-            # Kayıtları ekle
+
             for i, row in enumerate(self.cursor.fetchall()):
                 tag = 'evenrow' if i % 2 == 0 else 'oddrow'
                 formatted_row = (
                     row[0],  # ID
                     row[1],  # Tarih
-                    row[2],  # İşlem türü
-                    f"{abs(row[3]):.2f}",  # Miktar (mutlak değer)
-                    f"{row[4]:.2f}",  # Fiyat
-                    f"{row[5]:.2f}",  # Toplam
-                    row[6]   # Not
+                    f"{row[2]:.2f}",  # Miktar
+                    f"{row[3]:.2f}",  # Fiyat
+                    f"{row[4]:.2f}",  # Toplam
+                    row[5]   # Not
                 )
                 self.depo_tree.insert("", tk.END, values=formatted_row, tags=(tag,))
-            
-            # Depo durumunu güncelle
+
             self.update_fuel_level()
-            
+
         except Exception as e:
             messagebox.showerror("Hata", f"Kayıtlar yüklenirken hata: {str(e)}")
 
     def load_maintenance_records(self):
         self.maintenance_tree.delete(*self.maintenance_tree.get_children())
         self.cursor.execute("""
-        SELECT m.id, m.date, v.plate, m.km, m.fault, m.repair, 
+        SELECT m.id, strftime('%d.%m.%Y', m.date), v.plate, m.km, m.fault, m.repair, 
                m.labor_cost, m.material_cost, (m.labor_cost + m.material_cost)
         FROM maintenance m
         JOIN vehicles v ON m.vehicle_id = v.id
@@ -977,9 +934,9 @@ class AraçTakipUygulaması:
     def load_inspection_records(self):
         self.inspection_tree.delete(*self.inspection_tree.get_children())
         self.cursor.execute("""
-        SELECT i.id, i.date, v.plate, i.km, 
-               COALESCE(i.next_inspection_date, ''), 
-               COALESCE(i.next_maintenance_date, ''), 
+        SELECT i.id, strftime('%d.%m.%Y', i.date), v.plate, i.km, 
+               COALESCE(strftime('%d.%m.%Y', i.next_inspection_date), ''), 
+               COALESCE(strftime('%d.%m.%Y', i.next_maintenance_date), ''), 
                COALESCE(i.next_maintenance_km, '')
         FROM inspections i
         JOIN vehicles v ON i.vehicle_id = v.id
@@ -1025,15 +982,12 @@ class AraçTakipUygulaması:
         self.fuel_date_entry.set_date(datetime.strptime(fuel[1], "%d.%m.%Y"))
 
     def load_depo_data(self, event):
-        """Seçili depo kaydını forma yükler - Yeni sütun yapısına uygun"""
         selected = self.depo_tree.selection()
         if not selected:
             return
 
         try:
             record = self.depo_tree.item(selected[0])['values']
-
-            # Yeni sütun yapısı: (ID, Tarih, Miktar, Birim Fiyat, Toplam, Not)
             self.depo_amount_entry.delete(0, tk.END)
             self.depo_amount_entry.insert(0, record[2])  # Miktar
 
@@ -1049,7 +1003,6 @@ class AraçTakipUygulaması:
         except Exception as e:
             messagebox.showerror("Hata", f"Kayıt yüklenirken hata: {str(e)}")
             self.clear_depo_form()
-
 
     def load_maintenance_data(self, event):
         selected = self.maintenance_tree.selection()
@@ -1126,7 +1079,6 @@ class AraçTakipUygulaması:
         self.next_maintenance_date_entry.set_date(next_year)
 
     def clear_depo_form(self):
-        """Depo formunu temizler"""
         self.depo_amount_entry.delete(0, tk.END)
         self.depo_price_entry.delete(0, tk.END)
         self.depo_price_entry.insert(0, f"{self.current_fuel_price:.2f}")
@@ -1139,17 +1091,18 @@ class AraçTakipUygulaması:
         model = self.model_entry.get().strip()
         km = self.km_entry.get().strip()
         driver = self.driver_entry.get().strip()
-        
+
         if not plate or not model or not km:
             messagebox.showerror("Hata", "Lütfen zorunlu alanları doldurun (Plaka, Model, KM)!")
             return
-        
+
         try:
             km = int(km)
-    
+
             selected = self.vehicle_tree.selection()
             if selected:  # Update
                 old_plate = self.vehicle_tree.item(selected[0])['values'][0]
+                # Buradaki SQL sorgusunun doğru şekilde girintilendiğinden emin olun
                 self.cursor.execute(
                     "UPDATE vehicles SET plate=?, model=?, km=?, driver=? WHERE plate=?",
                     (plate, model, km, driver, old_plate)
@@ -1161,12 +1114,12 @@ class AraçTakipUygulaması:
                     (plate, model, km, driver)
                 )
                 messagebox.showinfo("Başarılı", "Yeni araç eklendi!")
-            
+
             self.conn.commit()
             self.load_vehicles()
             self.update_vehicle_combos()
             self.clear_vehicle_form()
-            
+
         except ValueError:
             messagebox.showerror("Hata", "Geçersiz KM değeri!")
         except sqlite3.IntegrityError:
@@ -1175,12 +1128,13 @@ class AraçTakipUygulaması:
             messagebox.showerror("Hata", f"Kayıt sırasında hata: {str(e)}")
             self.conn.rollback()
 
+
     def save_fuel_record(self):
         vehicle = self.fuel_vehicle_combo.get()
         km = self.fuel_km_entry.get().strip()
         amount = self.fuel_amount_entry.get().strip()
         price = self.fuel_price_entry.get().strip() or str(self.current_fuel_price)
-        date = self.fuel_date_entry.get_date().strftime("%d.%m.%Y")
+        date = self.fuel_date_entry.get_date().strftime("%Y-%m-%d")  # ISO format
 
         if not vehicle or not km or not amount:
             messagebox.showerror("Hata", "Lütfen zorunlu alanları doldurun (Araç, KM, Miktar)!")
@@ -1238,13 +1192,12 @@ class AraçTakipUygulaması:
             messagebox.showerror("Hata", f"Kayıt sırasında hata: {str(e)}")
             self.conn.rollback()
 
-
     def save_depo_record(self):
         """Depo doldurma işlemini kaydeder - Sadece giriş işlemi"""
         # Verileri al
         amount = self.depo_amount_entry.get().strip()
         price = self.depo_price_entry.get().strip()
-        date = self.depo_date_entry.get_date().strftime("%d.%m.%Y")
+        date = self.depo_date_entry.get_date().strftime("%Y-%m-%d")  # ISO format
         notes = self.depo_notes_entry.get().strip()
 
         # Validasyon
@@ -1304,45 +1257,6 @@ class AraçTakipUygulaması:
             messagebox.showerror("Hata", f"Kayıt sırasında hata: {str(e)}")
             self.conn.rollback()
 
-
-    def load_depo_records(self):
-        """Depo hareketlerini yükler - Yeni sütun yapısı"""
-        try:
-            self.depo_tree.delete(*self.depo_tree.get_children())
-
-            self.cursor.execute("""
-            SELECT 
-                id,
-                date,
-                amount,
-                price,
-                total,
-                COALESCE(notes, '')
-            FROM fuel_tank
-            WHERE transaction_type='IN'
-            ORDER BY date DESC, id DESC
-            LIMIT 200
-            """)
-
-            for i, row in enumerate(self.cursor.fetchall()):
-                tag = 'evenrow' if i % 2 == 0 else 'oddrow'
-                formatted_row = (
-                    row[0],  # ID
-                    row[1],  # Tarih
-                    f"{row[2]:.2f}",  # Miktar
-                    f"{row[3]:.2f}",  # Fiyat
-                    f"{row[4]:.2f}",  # Toplam
-                    row[5]   # Not
-                )
-                self.depo_tree.insert("", tk.END, values=formatted_row, tags=(tag,))
-
-            self.update_fuel_level()
-
-        except Exception as e:
-            messagebox.showerror("Hata", f"Kayıtlar yüklenirken hata: {str(e)}")
-
-
-
     def save_maintenance(self):
         vehicle = self.maintenance_vehicle_combo.get()
         km = self.maintenance_km_entry.get().strip()
@@ -1350,7 +1264,7 @@ class AraçTakipUygulaması:
         repair = self.maintenance_repair_entry.get().strip()
         labor_cost = self.maintenance_labor_cost_entry.get().strip() or "0"
         material_cost = self.maintenance_material_cost_entry.get().strip() or "0"
-        date = self.maintenance_date_entry.get_date().strftime("%d.%m.%Y")
+        date = self.maintenance_date_entry.get_date().strftime("%Y-%m-%d")  # ISO format
         
         if not vehicle or not km or not fault or not repair:
             messagebox.showerror("Hata", "Lütfen zorunlu alanları doldurun (Araç, KM, Arıza, İşlem)!")
@@ -1400,8 +1314,8 @@ class AraçTakipUygulaması:
     def save_inspection(self):
         vehicle = self.inspection_vehicle_combo.get()
         km = self.inspection_km_entry.get().strip()
-        date = self.inspection_date_entry.get_date().strftime("%d.%m.%Y")
-        next_date = self.next_inspection_date_entry.get_date().strftime("%d.%m.%Y")
+        date = self.inspection_date_entry.get_date().strftime("%Y-%m-%d")  # ISO format
+        next_date = self.next_inspection_date_entry.get_date().strftime("%Y-%m-%d")  # ISO format
         
         if not vehicle or not km or not date or not next_date:
             messagebox.showerror("Hata", "Lütfen zorunlu alanları doldurun (Araç, KM, Tarih, Sonraki Muayene)!")
@@ -1449,9 +1363,9 @@ class AraçTakipUygulaması:
     def save_periodic_maintenance(self):
         vehicle = self.maintenance_vehicle_combo2.get()
         km = self.maintenance_km_entry2.get().strip()
-        date = self.maintenance_date_entry2.get_date().strftime("%d.%m.%Y")
+        date = self.maintenance_date_entry2.get_date().strftime("%Y-%m-%d")  # ISO format
         next_maintenance_km = self.next_maintenance_km_entry.get().strip()
-        next_maintenance_date = self.next_maintenance_date_entry.get_date().strftime("%d.%m.%Y")
+        next_maintenance_date = self.next_maintenance_date_entry.get_date().strftime("%Y-%m-%d")  # ISO format
         
         if not all([vehicle, km, date, next_maintenance_km, next_maintenance_date]):
             messagebox.showerror("Hata", "Lütfen tüm alanları doldurun!")
@@ -1501,7 +1415,6 @@ class AraçTakipUygulaması:
         except Exception as e:
             messagebox.showerror("Hata", f"Kayıt sırasında hata: {str(e)}")
             self.conn.rollback()
-
 
     def delete_vehicle(self):
         selected = self.vehicle_tree.selection()
@@ -1553,19 +1466,16 @@ class AraçTakipUygulaması:
                 self.conn.rollback()
 
     def delete_depo_record(self):
-        """Seçili depo kaydını siler"""
         selected = self.depo_tree.selection()
         if not selected:
             messagebox.showerror("Hata", "Lütfen silmek istediğiniz kaydı seçin!")
             return
             
         record_id = self.depo_tree.item(selected[0])['values'][0]
-        record_date = self.depo_tree.item(selected[0])['values'][1]
-        record_type = self.depo_tree.item(selected[0])['values'][2]
         
         if not messagebox.askyesno(
             "Onay", 
-            f"{record_date} tarihli {record_type} işlemini silmek istediğinize emin misiniz?\n"
+            f"Bu depo kaydını silmek istediğinize emin misiniz?\n"
             "Bu işlem geri alınamaz!"
         ):
             return
@@ -1632,7 +1542,6 @@ class AraçTakipUygulaması:
             messagebox.showerror("Hata", "Geçersiz sayısal değer!")
 
     def calculate_depo_cost(self):
-        """Depo işlemi maliyetini hesaplar"""
         try:
             amount = self.depo_amount_entry.get().strip()
             price = self.depo_price_entry.get().strip()
@@ -1653,11 +1562,10 @@ class AraçTakipUygulaması:
                 return
             
             total = amount * price
-            transaction_type = "Giriş" if self.transaction_type.get() == "IN" else "Çıkış"
             
             messagebox.showinfo(
                 "Hesaplama Sonucu",
-                f"{amount:.2f} litre yakıt {transaction_type} işlemi\n"
+                f"{amount:.2f} litre yakıt giriş işlemi\n"
                 f"Birim fiyat: {price:.2f} TL\n"
                 f"Toplam maliyet: {total:.2f} TL"
             )
@@ -1666,8 +1574,8 @@ class AraçTakipUygulaması:
 
     def filter_reports(self):
         vehicle = self.report_vehicle_combo.get()
-        start_date = self.start_date_entry.get_date().strftime("%d.%m.%Y") if self.start_date_entry.get() else ""
-        end_date = self.end_date_entry.get_date().strftime("%d.%m.%Y") if self.end_date_entry.get() else ""
+        start_date = self.start_date_entry.get_date().strftime("%Y-%m-%d") if self.start_date_entry.get() else ""
+        end_date = self.end_date_entry.get_date().strftime("%Y-%m-%d") if self.end_date_entry.get() else ""
         report_type = self.report_type_combo.get()
         
         if report_type == "Yakıt":
@@ -1679,7 +1587,7 @@ class AraçTakipUygulaması:
 
     def filter_fuel_reports(self, vehicle, start_date, end_date):
         query = """
-        SELECT f.date, v.plate, f.km, f.amount, f.price, f.total 
+        SELECT strftime('%d.%m.%Y', f.date), v.plate, f.km, f.amount, f.price, f.total 
         FROM fuel_records f
         JOIN vehicles v ON f.vehicle_id = v.id
         WHERE 1=1
@@ -1692,11 +1600,11 @@ class AraçTakipUygulaması:
         
         if start_date:
             query += " AND f.date >= ?"
-            params.append(f"{start_date}")
+            params.append(start_date)
         
         if end_date:
             query += " AND f.date <= ?"
-            params.append(f"{end_date}")
+            params.append(end_date)
         
         query += " ORDER BY f.date DESC"
         
@@ -1722,7 +1630,7 @@ class AraçTakipUygulaması:
 
     def filter_maintenance_reports(self, vehicle, start_date, end_date):
         query = """
-        SELECT m.date, v.plate, m.km, m.fault, m.repair, 
+        SELECT strftime('%d.%m.%Y', m.date), v.plate, m.km, m.fault, m.repair, 
                m.labor_cost, m.material_cost, (m.labor_cost + m.material_cost)
         FROM maintenance m
         JOIN vehicles v ON m.vehicle_id = v.id
@@ -1736,11 +1644,11 @@ class AraçTakipUygulaması:
         
         if start_date:
             query += " AND m.date >= ?"
-            params.append(f"{start_date}")
+            params.append(start_date)
         
         if end_date:
             query += " AND m.date <= ?"
-            params.append(f"{end_date}")
+            params.append(end_date)
         
         query += " ORDER BY m.date DESC"
         
@@ -1766,9 +1674,9 @@ class AraçTakipUygulaması:
 
     def filter_inspection_reports(self, vehicle, start_date, end_date):
         query = """
-        SELECT i.date, v.plate, i.km, 
-               COALESCE(i.next_inspection_date, '') as next_inspection,
-               COALESCE(i.next_maintenance_date, '') as next_maintenance,
+        SELECT strftime('%d.%m.%Y', i.date), v.plate, i.km, 
+               COALESCE(strftime('%d.%m.%Y', i.next_inspection_date), '') as next_inspection,
+               COALESCE(strftime('%d.%m.%Y', i.next_maintenance_date), '') as next_maintenance,
                COALESCE(i.next_maintenance_km, '') as next_maintenance_km
         FROM inspections i
         JOIN vehicles v ON i.vehicle_id = v.id
@@ -1782,11 +1690,11 @@ class AraçTakipUygulaması:
         
         if start_date:
             query += " AND i.date >= ?"
-            params.append(f"{start_date}")
+            params.append(start_date)
         
         if end_date:
             query += " AND i.date <= ?"
-            params.append(f"{end_date}")
+            params.append(end_date)
         
         query += " ORDER BY i.date DESC"
         
@@ -1812,62 +1720,78 @@ class AraçTakipUygulaması:
 
     def calculate_cost(self):
         vehicle = self.cost_vehicle_combo.get()
-        start_date = self.cost_start_date_entry.get_date().strftime("%d.%m.%Y") if self.cost_start_date_entry.get() else ""
-        end_date = self.cost_end_date_entry.get_date().strftime("%d.%m.%Y") if self.cost_end_date_entry.get() else ""
-        
+        start_date = self.cost_start_date_entry.get_date().strftime("%Y-%m-%d") if self.cost_start_date_entry.get() else ""
+        end_date = self.cost_end_date_entry.get_date().strftime("%Y-%m-%d") if self.cost_end_date_entry.get() else ""
+
         if not start_date or not end_date:
             messagebox.showerror("Hata", "Lütfen başlangıç ve bitiş tarihlerini seçin!")
             return
-        
+
         try:
+            # Yakıt kayıtlarını tarih sırasına göre al
             query = """
             SELECT 
                 v.plate,
-                SUM(f.amount) as total_amount,
-                SUM(f.total) as total_cost,
-                MIN(f.km) as min_km,
-                MAX(f.km) as max_km
+                f.amount,
+                f.km,
+                f.date
             FROM fuel_records f
             JOIN vehicles v ON f.vehicle_id = v.id
             WHERE f.date BETWEEN ? AND ?
             """
             params = [start_date, end_date]
-            
+
             if vehicle and vehicle != "Tüm Araçlar":
                 query += " AND v.plate = ?"
                 params.append(vehicle)
-            
-            query += " GROUP BY v.plate"
-            
+
+            query += " ORDER BY f.date ASC"  # Tarihe göre sırala
+
             self.cursor.execute(query, params)
-            results = self.cursor.fetchall()
-            
-            if not results:
-                messagebox.showinfo("Bilgi", "Seçilen tarih aralığında kayıt bulunamadı!")
+            records = self.cursor.fetchall()
+
+            if len(records) < 2:
+                messagebox.showinfo("Bilgi", "En az 2 kayıt gereklidir!")
                 return
-            
+
+            # Plate'e göre grupla (çoklu araç desteği)
+            vehicles = {}
+            for record in records:
+                plate = record[0]
+                if plate not in vehicles:
+                    vehicles[plate] = []
+                vehicles[plate].append((record[1], record[2]))  # (amount, km)
+
             self.cost_tree.delete(*self.cost_tree.get_children())
-            
-            for result in results:
-                plate = result[0]
-                total_amount = result[1]
-                total_cost = result[2]
-                min_km = result[3]
-                max_km = result[4]
-                
-                if min_km is None or max_km is None or min_km == max_km:
-                    avg_consumption = 0
-                else:
-                    km_diff = max_km - min_km
-                    avg_consumption = (total_amount / km_diff) * 100 if km_diff > 0 else 0
-                
+
+            for plate, fuel_data in vehicles.items():
+                total_fuel = 0
+                total_km = 0
+                avg_consumption = 0
+
+                # Her araç için tüketimi hesapla
+                if len(fuel_data) >= 2:
+                    total_fuel = sum(amount for amount, _ in fuel_data[1:])  # İlk yakıt alımını hariç tut
+                    total_km = fuel_data[-1][1] - fuel_data[0][1]  # Son km - ilk km
+                    avg_consumption = (total_fuel / total_km) * 100 if total_km > 0 else 0
+
+                # Toplam maliyet (tüm yakıt alımları dahil)
+                total_cost_query = """
+                SELECT SUM(f.total) 
+                FROM fuel_records f
+                JOIN vehicles v ON f.vehicle_id = v.id
+                WHERE v.plate = ? AND f.date BETWEEN ? AND ?
+                """
+                self.cursor.execute(total_cost_query, (plate, start_date, end_date))
+                total_cost = self.cursor.fetchone()[0] or 0
+
                 self.cost_tree.insert("", tk.END, values=(
                     plate,
-                    f"{total_amount:.2f}",
+                    f"{sum(amount for amount, _ in fuel_data):.2f}",  # Toplam yakıt
                     f"{total_cost:.2f}",
-                    f"{avg_consumption:.2f}"
+                    f"{avg_consumption:.2f}" if avg_consumption > 0 else "Hesaplanamadı"
                 ))
-            
+
         except Exception as e:
             messagebox.showerror("Hata", f"Maliyet hesaplanırken hata: {str(e)}")
 
@@ -1903,7 +1827,6 @@ class AraçTakipUygulaması:
         finally:
             # 1 dakika sonra tekrar kontrol et
             self.root.after(60000, self.check_notifications)
-
 
     def update_fuel_level(self):
         """Depodaki yakıt seviyesini günceller"""
@@ -2021,7 +1944,6 @@ class AraçTakipUygulaması:
             messagebox.showerror("Hata", f"Bakım uyarıları gösterilirken hata oluştu: {str(e)}")
             print("Hata detayı:", str(e))  # Konsola hata detayını yazdır
 
-
     def show_inspection_notifications(self):
         today = datetime.now().date()
         sixty_days_later = today + timedelta(days=60)
@@ -2038,7 +1960,7 @@ class AraçTakipUygulaması:
         inspection_alerts = []
         for alert in self.cursor.fetchall():
             try:
-                next_date = datetime.strptime(alert[1], "%d.%m.%Y").date()
+                next_date = datetime.strptime(alert[1], "%Y-%m-%d").date()
                 days_diff = (next_date - today).days
                 if next_date <= sixty_days_later:
                     inspection_alerts.append((alert[0], alert[1], days_diff))
@@ -2057,7 +1979,7 @@ class AraçTakipUygulaması:
         maintenance_alerts = []
         for alert in self.cursor.fetchall():
             try:
-                next_date = datetime.strptime(alert[1], "%d.%m.%Y").date()
+                next_date = datetime.strptime(alert[1], "%Y-%m-%d").date()
                 days_diff = (next_date - today).days
                 if next_date <= sixty_days_later:
                     maintenance_alerts.append((alert[0], alert[1], days_diff))
@@ -2175,7 +2097,7 @@ class AraçTakipUygulaması:
                 messagebox.showerror("Hata", "Grafik oluşturmak için yeterli veri yok!")
                 return
             
-            dates = [datetime.strptime(row[0], "%d.%m.%Y") for row in data]
+            dates = [datetime.strptime(row[0], "%Y-%m-%d") for row in data]
             kms = [row[1] for row in data]
             amounts = [row[2] for row in data]
             
@@ -2363,7 +2285,7 @@ class AraçTakipUygulaması:
         try:
             # Verileri al
             self.cursor.execute("""
-            SELECT f.date, v.plate, f.km, f.amount, f.price, f.total 
+            SELECT strftime('%d.%m.%Y', f.date), v.plate, f.km, f.amount, f.price, f.total 
             FROM fuel_records f
             JOIN vehicles v ON f.vehicle_id = v.id
             ORDER BY f.date DESC
@@ -2431,7 +2353,7 @@ class AraçTakipUygulaması:
         try:
             # Verileri al
             self.cursor.execute("""
-            SELECT m.date, v.plate, m.km, m.fault, m.repair, 
+            SELECT strftime('%d.%m.%Y', m.date), v.plate, m.km, m.fault, m.repair, 
                    m.labor_cost, m.material_cost, (m.labor_cost + m.material_cost)
             FROM maintenance m
             JOIN vehicles v ON m.vehicle_id = v.id
@@ -2600,7 +2522,7 @@ class AraçTakipUygulaması:
             
             elif report_type == "Bakım":
                 sheet_name = "Bakım İşlemleri"
-                headers = ["Tarih", "Plaka", "KM", "Arıza", "Yapılan İşlem", 
+                headers = ["Tarih", "Plaka", "KM", "Arıza", "İşlem", 
                           "İşçilik Tutarı (TL)", "Malzeme Tutarı (TL)", "Toplam Tutar (TL)"]
                 data = []
                 for item in self.report_tree.get_children():
