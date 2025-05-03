@@ -1,2063 +1,2651 @@
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
+from tkinter import ttk, messagebox, simpledialog, filedialog
 from datetime import datetime, timedelta
 import sqlite3
 import os
-import sys
 import matplotlib # type: ignore
 matplotlib.use('TkAgg')
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg # type: ignore
-import matplotlib.pyplot as plt # type: ignore
-from PIL import Image, ImageTk # type: ignore
+import matplotlib.pyplot as plt # type: ignore # type: ignore
+from tkcalendar import DateEntry # type: ignore
+import openpyxl # type: ignore # type: ignore
+from openpyxl.styles import Font, Alignment, Border, Side, PatternFill # type: ignore
+from openpyxl.utils import get_column_letter # type: ignore
 
-# Opsiyonel modüller için try-except blokları
-try:
-    from openpyxl import Workbook # type: ignore
-    from openpyxl.styles import Font # type: ignore
-    HAS_EXCEL = True
-except ImportError:
-    HAS_EXCEL = False
-    messagebox.showwarning("Uyarı", "Excel raporlama özelliği devre dışı (openpyxl kurulu değil)")
-
-try:
-    import sv_ttk # type: ignore
-    HAS_SV_TTK = True
-except ImportError:
-    HAS_SV_TTK = False
-
-try:
-    import winsound
-    HAS_SOUND = True
-except ImportError:
-    HAS_SOUND = False
-
-class YakıtTakipUygulaması:
+class AraçTakipUygulaması:
     def __init__(self, root):
         self.root = root
-        self.setup_main_window()
         self.setup_database()
-        self.create_tables()  # Tabloları önce oluştur
-        self.initialize_database()  # Sonra verileri başlat
+        self.setup_styles()   
         self.setup_ui()
         self.load_initial_data()
+        self.check_notifications()
         
-        # Tema ayarı
-        self.apply_theme("dark")
-
-    def apply_theme(self, theme_name):
-        """Tema uygular (sv_ttk yoksa standart tema kullanır)"""
-        if HAS_SV_TTK:
-            try:
-                if theme_name == "light":
-                    sv_ttk.use_light_theme()
-                else:
-                    sv_ttk.use_dark_theme()
-            except Exception as e:
-                print(f"Tema uygulanırken hata: {e}")
-        else:
-            # Standart Tkinter teması
-            self.root.tk_setPalette(background='#f0f0f0' if theme_name == "light" else '#333333')
-
-    def setup_main_window(self):
-        """Ana pencere ayarlarını yapar"""
-        self.root.title("Temelli Yakıt Takip Sistemi v1.0")
-        self.root.geometry("1200x700")
-        self.root.minsize(1000, 600)
+        self.transaction_type = tk.StringVar(value="IN") 
         
-        # DPI farkındalığı (Windows için)
-        if sys.platform == 'win32':
-            try:
-                from ctypes import windll
-                windll.shcore.SetProcessDpiAwareness(1)
-            except:
-                pass
-
     def setup_database(self):
-        """Veritabanı bağlantısını kurar"""
-        # Uygulamanın çalıştığı dizini bul
-        if getattr(sys, 'frozen', False):
-            # EXE olarak çalışıyorsa
-            application_path = os.path.dirname(sys.executable)
-        else:
-            # Script olarak çalışıyorsa
-            application_path = os.path.dirname(os.path.abspath(__file__))
-    
-        self.db_path = os.path.join(application_path, "yakit_takip.db")
-    
+        """Veritabanı tablolarını oluşturur veya bağlantı kurar"""
+        self.db_name = "arac_takip.db"
+        self.db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), self.db_name)
+        
         try:
             self.conn = sqlite3.connect(self.db_path)
+            self.conn.create_function("date", 1, lambda x: datetime.strptime(x, "%d.%m.%Y").date())
             self.cursor = self.conn.cursor()
-        except sqlite3.Error as e:
-            messagebox.showerror("Veritabanı Hatası", f"Veritabanına bağlanılamadı: {str(e)}")
-            sys.exit(1)
-
-    def create_tables(self):
-        """Gerekli tabloları oluşturur"""
-        tables = [
-            """CREATE TABLE IF NOT EXISTS araclar (
-                arac_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                plaka TEXT UNIQUE NOT NULL,
+            
+            self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS vehicles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                plate TEXT UNIQUE NOT NULL,
                 model TEXT NOT NULL,
-                mevcut_km INTEGER DEFAULT 0,
-                model_yili INTEGER,
-                muayene_tarihi TEXT,
-                bakim_tarihi TEXT,
-                arac_surucusu TEXT,
-                eklenme_tarihi TEXT DEFAULT CURRENT_TIMESTAMP
-            )""",
-            """CREATE TABLE IF NOT EXISTS yakit_kayitlari (
-                kayit_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                arac_id INTEGER NOT NULL,
+                km INTEGER DEFAULT 0,
+                driver TEXT
+            )""")
+            
+            self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS fuel_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                vehicle_id INTEGER NOT NULL,
+                date TEXT NOT NULL,
                 km INTEGER NOT NULL,
-                yakit_miktari REAL NOT NULL,
-                notlar TEXT,
-                tarih TEXT NOT NULL,
-                eklenme_tarihi TEXT DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (arac_id) REFERENCES araclar(arac_id)
-            )""",
-            """CREATE TABLE IF NOT EXISTS depo_dolumlari (
-                dolum_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                miktar REAL NOT NULL,
-                birim_fiyat REAL,
-                toplam_tutar REAL,
-                notlar TEXT,
-                tarih TEXT NOT NULL,
-                eklenme_tarihi TEXT DEFAULT CURRENT_TIMESTAMP
-            )""",
-            """CREATE TABLE IF NOT EXISTS depo (
-                depo_id INTEGER PRIMARY KEY DEFAULT 1,
-                mevcut_yakit REAL DEFAULT 0,
-                son_guncelleme TEXT DEFAULT CURRENT_TIMESTAMP
-            )""",
-            """CREATE TABLE IF NOT EXISTS bakim_tamirat (
-                kayit_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                arac_id INTEGER NOT NULL,
-                tarih TEXT NOT NULL,
-                saat TEXT,
-                tespit_edilen_ariza TEXT,
-                yapilan_islem TEXT,
-                parca_ucreti REAL DEFAULT 0,
-                iscilik_ucreti REAL DEFAULT 0,
-                toplam_tutar REAL DEFAULT 0,
-                notlar TEXT,
-                eklenme_tarihi TEXT DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (arac_id) REFERENCES araclar(arac_id)
-            )"""
-        ]
+                amount REAL NOT NULL,
+                price REAL NOT NULL,
+                total REAL NOT NULL,
+                FOREIGN KEY (vehicle_id) REFERENCES vehicles(id)
+            )""")
+            
+            self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS fuel_tank (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                amount REAL NOT NULL,
+                price REAL NOT NULL,
+                total REAL NOT NULL,
+                transaction_type TEXT NOT NULL CHECK(transaction_type IN ('IN', 'OUT')),
+                notes TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )""")
 
-        for table_query in tables:
-            try:
-                self.cursor.execute(table_query)
-                self.conn.commit()
-            except sqlite3.Error as e:
-                self.show_error(f"Tablo oluşturulamadı: {str(e)}")
-
-    def initialize_database(self):
-        """Temel verileri ekler"""
-        try:
-            self.cursor.execute("INSERT OR IGNORE INTO depo (depo_id, mevcut_yakit) VALUES (1, 0)")
+            self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS maintenance (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                vehicle_id INTEGER NOT NULL,
+                date TEXT NOT NULL,
+                km INTEGER NOT NULL,
+                fault TEXT,
+                repair TEXT,
+                labor_cost REAL DEFAULT 0,
+                material_cost REAL DEFAULT 0,
+                FOREIGN KEY (vehicle_id) REFERENCES vehicles(id)
+            )""")
+            
+            self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS inspections (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                vehicle_id INTEGER NOT NULL,
+                date TEXT NOT NULL,
+                km INTEGER NOT NULL,
+                next_inspection_date TEXT,
+                next_maintenance_date TEXT,
+                next_maintenance_km INTEGER,
+                FOREIGN KEY (vehicle_id) REFERENCES vehicles(id)
+            )""")
+            
             self.conn.commit()
+            
+            # Yakıt fiyatı ve depo durumu için değişkenler
+            self.current_fuel_price = 20.0  # Varsayılan fiyat
+            self.current_fuel_level = 0.0  # Litre cinsinden
+            
+            # Son yakıt fiyatını al
+            self.cursor.execute("SELECT price FROM fuel_tank WHERE transaction_type='IN' ORDER BY date DESC LIMIT 1")
+            result = self.cursor.fetchone()
+            if result:
+                self.current_fuel_price = float(result[0])
+                
+            # Depodaki mevcut yakıt miktarını hesapla
+            self.cursor.execute("""
+            SELECT SUM(CASE 
+                WHEN transaction_type='IN' THEN amount 
+                ELSE -amount 
+            END) FROM fuel_tank
+            """)
+            result = self.cursor.fetchone()
+            self.current_fuel_level = float(result[0]) if result and result[0] else 0.0
+                
         except sqlite3.Error as e:
-            self.show_error(f"Veritabanı başlatma hatası: {str(e)}")
-            self.conn.rollback()
+            messagebox.showerror("Veritabanı Hatası", f"Veritabanı bağlantısı kurulamadı: {str(e)}")
+            self.root.destroy()
+            raise
+
+    def setup_styles(self):
+        # Renk paleti
+        self.primary_color = "#2c3e50"
+        self.secondary_color = "#3498db"
+        self.accent_color = "#e74c3c"
+        self.success_color = "#2ecc71"
+        self.warning_color = "#f39c12"
+        self.light_bg = "#ecf0f1"
+        self.lighter_bg = "#f8f9fa"
+        self.dark_text = "#2c3e50"
+        self.light_text = "#ecf0f1"
+        
+        # Yazı tipleri
+        self.title_font = ('Segoe UI', 12, 'bold')
+        self.subtitle_font = ('Segoe UI', 10, 'bold')
+        self.normal_font = ('Segoe UI', 9)
+        self.small_font = ('Segoe UI', 8)
+        
+        # Temel stil ayarları
+        self.style = ttk.Style()
+        self.style.theme_use('clam')
+        
+        # Genel ayarlar
+        self.style.configure('.', 
+                           background=self.light_bg,
+                           foreground=self.dark_text,
+                           font=self.normal_font)
+        
+        # Frame stilleri
+        self.style.configure('TFrame', background=self.light_bg)
+        self.style.configure('Header.TFrame', background=self.primary_color)
+        self.style.configure('Status.TFrame', background=self.primary_color)
+        
+        # Label stilleri
+        self.style.configure('TLabel', 
+                           background=self.light_bg,
+                           foreground=self.dark_text,
+                           font=self.normal_font)
+        self.style.configure('Title.TLabel', 
+                           font=self.title_font,
+                           foreground=self.primary_color)
+        self.style.configure('Subtitle.TLabel', 
+                           font=self.subtitle_font,
+                           foreground=self.secondary_color)
+        
+        # Button stilleri
+        self.style.configure('TButton', 
+                           font=self.subtitle_font,
+                           borderwidth=1,
+                           relief='raised',
+                           padding=6)
+        self.style.configure('Primary.TButton', 
+                           foreground=self.light_text,
+                           background=self.secondary_color,
+                           borderwidth=0)
+        self.style.map('Primary.TButton',
+                      background=[('active', self.primary_color), ('pressed', self.accent_color)],
+                      foreground=[('active', self.light_text), ('pressed', self.light_text)])
+        
+        self.style.configure('Danger.TButton', 
+                           foreground=self.light_text,
+                           background=self.accent_color,
+                           borderwidth=0)
+        self.style.map('Danger.TButton',
+                      background=[('active', '#c0392b'), ('pressed', '#a93226')])
+        
+        self.style.configure('Success.TButton', 
+                           foreground=self.light_text,
+                           background=self.success_color,
+                           borderwidth=0)
+        self.style.map('Success.TButton',
+                      background=[('active', '#27ae60'), ('pressed', '#219653')])
+        
+        # Entry stilleri
+        self.style.configure('TEntry', 
+                           fieldbackground="white",
+                           foreground=self.dark_text,
+                           insertcolor=self.dark_text,
+                           padding=5,
+                           bordercolor=self.secondary_color,
+                           lightcolor=self.secondary_color)
+        
+        # Combobox stilleri
+        self.style.configure('TCombobox', 
+                           fieldbackground="white",
+                           foreground=self.dark_text,
+                           selectbackground=self.secondary_color,
+                           padding=5)
+        
+        # Notebook (Sekme) stilleri
+        self.style.configure('TNotebook', background=self.light_bg)
+        self.style.configure('TNotebook.Tab', 
+                           background=self.lighter_bg,
+                           foreground=self.dark_text,
+                           padding=[10, 5],
+                           font=self.subtitle_font)
+        self.style.map('TNotebook.Tab', 
+                      background=[('selected', self.secondary_color)],
+                      foreground=[('selected', self.light_text)])
+        
+        # Treeview (Tablo) stilleri
+        self.style.configure('Treeview', 
+                           background="white",
+                           foreground=self.dark_text,
+                           rowheight=25,
+                           fieldbackground="white",
+                           font=self.normal_font,
+                           bordercolor=self.light_bg,
+                           lightcolor=self.light_bg)
+        self.style.configure('Treeview.Heading', 
+                           background=self.primary_color,
+                           foreground=self.light_text,
+                           font=self.subtitle_font,
+                           padding=5)
+        self.style.map('Treeview', 
+                      background=[('selected', self.secondary_color)],
+                      foreground=[('selected', self.light_text)])
+        
+        # Scrollbar stilleri
+        self.style.configure('Vertical.TScrollbar', 
+                           background=self.light_bg,
+                           arrowcolor=self.secondary_color,
+                           troughcolor=self.light_bg)
+        
+        # LabelFrame stilleri
+        self.style.configure('TLabelframe', 
+                           background=self.light_bg,
+                           foreground=self.primary_color,
+                           font=self.subtitle_font,
+                           bordercolor=self.light_bg)
+        self.style.configure('TLabelframe.Label', 
+                           background=self.light_bg,
+                           foreground=self.primary_color,
+                           font=self.subtitle_font)
+        
+        # DateEntry stili
+        self.style.configure('DateEntry', 
+                           fieldbackground="white",
+                           foreground=self.dark_text,
+                           arrowcolor=self.secondary_color,
+                           selectbackground=self.secondary_color)
 
     def setup_ui(self):
-        """Arayüzü oluşturur"""
-        self.create_main_frame()
-        self.create_menu()
-        self.create_notebook()
-        self.create_status_bar()
-        self.play_sound("SystemStart")
-
-    def create_main_frame(self):
-        """Ana frame'i oluşturur"""
-        self.main_frame = ttk.Frame(self.root)
-        self.main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        # Başlık çubuğu
-        header = ttk.Frame(self.main_frame)
-        header.pack(fill=tk.X, pady=5)
-        
-        self.title_label = ttk.Label(
-            header, 
-            text="TEMELLİ YAKIT TAKİP SİSTEMİ", 
-            font=('Helvetica', 14, 'bold')
-        )
-        self.title_label.pack(side=tk.LEFT)
+        try:
+            self.root.title("Araç Takip Sistemi")
+            self.root.geometry("1200x800")
+            self.root.minsize(1000, 700)
+            self.root.configure(bg=self.light_bg)
+            
+            # Header
+            header_frame = ttk.Frame(self.root, style='Header.TFrame')
+            header_frame.pack(fill=tk.X, padx=0, pady=0)
+            
+            ttk.Label(header_frame, 
+                     text="ARAÇ TAKİP SİSTEMİ", 
+                     style='Title.TLabel',
+                     foreground=self.light_text,
+                     background=self.primary_color).pack(pady=15)
+            
+            # Notebook (Sekmeler)
+            self.notebook = ttk.Notebook(self.root)
+            
+            # Araç sekmesi
+            self.create_arac_tab()
+            
+            # Yakıt sekmesi
+            self.create_yakit_tab()
+            
+            # Depo sekmesi
+            self.create_depo_tab()
+            
+            # Bakım sekmesi
+            self.create_bakim_tab()
+            
+            # Muayene ve periyodik bakım sekmesi
+            self.create_muayene_bakim_tab()
+            
+            # Rapor sekmesi
+            self.create_rapor_tab()
+            
+            # Maliyet sekmesi
+            self.create_maliyet_tab()
+            
+            self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 5))
+            
+            # Durum çubuğu
+            self.status_bar = ttk.Frame(self.root, style='Status.TFrame')
+            self.fiyat_label = ttk.Label(
+                self.status_bar, 
+                text=f"Mevcut Yakıt Fiyatı: {self.current_fuel_price:.2f} TL",
+                font=self.subtitle_font,
+                foreground=self.light_text,
+                background=self.primary_color
+            )
+            self.fiyat_label.pack(side=tk.RIGHT, padx=10, pady=5)
+            self.status_bar.pack(fill=tk.X, padx=0, pady=0)
+            
+            # Menü oluştur
+            self.create_menu()
+            
+        except Exception as e:
+            messagebox.showerror("UI Hatası", f"Arayüz oluşturulurken hata: {str(e)}")
+            self.root.destroy()
+            raise
 
     def create_menu(self):
-        """Menü çubuğunu oluşturur"""
-        menubar = tk.Menu(self.root)
-    
+        menubar = tk.Menu(self.root, bg=self.light_bg, fg=self.dark_text, activebackground=self.secondary_color)
+        
         # Dosya menüsü
-        file_menu = tk.Menu(menubar, tearoff=0)
-        file_menu.add_command(label="Yedek Al", command=self.backup_database)
-        if HAS_EXCEL:
-            excel_menu = tk.Menu(file_menu, tearoff=0)
-            excel_menu.add_command(label="Yakıt Raporu", command=self.generate_excel_report)
-            excel_menu.add_command(label="Bakım Raporu", command=self.generate_bakim_excel_report)
-            file_menu.add_cascade(label="Excel Raporları", menu=excel_menu)
+        file_menu = tk.Menu(menubar, tearoff=0, bg=self.light_bg, fg=self.dark_text, activebackground=self.secondary_color)
+        file_menu.add_command(label="Yakıt Fiyatı Güncelle", command=self.update_fuel_price)
+        file_menu.add_command(label="Yedek Oluştur", command=self.create_backup)
+        file_menu.add_command(label="Yedekten Geri Yükle", command=self.restore_backup)
+        
+        # Excel çıktı alt menüsü
+        excel_menu = tk.Menu(file_menu, tearoff=0, bg=self.light_bg, fg=self.dark_text, activebackground=self.secondary_color)
+        excel_menu.add_command(label="Yakıt İşlemleri", command=self.export_fuel_to_excel)
+        excel_menu.add_command(label="Bakım İşlemleri", command=self.export_maintenance_to_excel)
+        excel_menu.add_command(label="Maliyet Raporu", command=self.export_cost_report_to_excel)
+        
+        file_menu.add_cascade(label="Excel'e Aktar", menu=excel_menu)
         file_menu.add_separator()
         file_menu.add_command(label="Çıkış", command=self.on_closing)
         menubar.add_cascade(label="Dosya", menu=file_menu)
-    
-    # ... diğer menü öğeleri aynı kalacak ...
+
+        # Uyarılar menüsü
+        self.notification_menu = tk.Menu(menubar, tearoff=0, bg=self.light_bg, fg=self.dark_text, activebackground=self.secondary_color)
+        self.notification_menu.add_command(label="Bakım Uyarıları", command=self.show_maintenance_notifications)
+        self.notification_menu.add_command(label="Muayene Uyarıları", command=self.show_inspection_notifications)
+        menubar.add_cascade(label="Uyarılar", menu=self.notification_menu)
         
-        # Araçlar menüsü
-        tools_menu = tk.Menu(menubar, tearoff=0)
-        tools_menu.add_command(label="Veri Analizi", command=self.show_data_analysis)
-        if HAS_SV_TTK:
-            tools_menu.add_command(label="Light Tema", command=lambda: self.apply_theme("light"))
-            tools_menu.add_command(label="Dark Tema", command=lambda: self.apply_theme("dark"))
-        menubar.add_cascade(label="Araçlar", menu=tools_menu)
-        
-        # Yardım menüsü
-        help_menu = tk.Menu(menubar, tearoff=0)
-        help_menu.add_command(label="Yardım", command=self.show_help)
-        help_menu.add_command(label="Hakkında", command=self.show_about)
-        menubar.add_cascade(label="Yardım", menu=help_menu)
+        # Rapor menüsü
+        report_menu = tk.Menu(menubar, tearoff=0, bg=self.light_bg, fg=self.dark_text, activebackground=self.secondary_color)
+        report_menu.add_command(label="Maliyet Raporu", command=self.show_cost_report)
+        report_menu.add_command(label="Tüketim Grafiği", command=self.show_consumption_graph)
+        menubar.add_cascade(label="Raporlar", menu=report_menu)
         
         self.root.config(menu=menubar)
 
-    def create_notebook(self):
-        """Notebook (sekmeler) oluşturur"""
-        self.notebook = ttk.Notebook(self.main_frame)
-        self.notebook.pack(fill=tk.BOTH, expand=True)
+    def create_arac_tab(self):
+        frame = ttk.Frame(self.notebook)
+        self.notebook.add(frame, text="Araçlar", padding=5)
         
-        # Sekmeler
-        self.arac_frame = ttk.Frame(self.notebook)
-        self.yakit_frame = ttk.Frame(self.notebook)
-        self.depo_frame = ttk.Frame(self.notebook)
-        self.rapor_frame = ttk.Frame(self.notebook)
-        self.arac_detay_frame = ttk.Frame(self.notebook)  # Yeni araç detay sekmesi
-        self.bakim_tamirat_frame = ttk.Frame(self.notebook)  # Yeni bakım tamirat sekmesi
+        # Add/edit vehicle panel
+        add_frame = ttk.LabelFrame(frame, text="Araç Ekle/Düzenle", padding=10)
+        add_frame.pack(fill=tk.X, padx=10, pady=5)
         
-        self.notebook.add(self.arac_frame, text="Araç Yönetimi")
-        self.notebook.add(self.yakit_frame, text="Yakıt İşlemleri")
-        self.notebook.add(self.depo_frame, text="Depo Yönetimi")
-        self.notebook.add(self.rapor_frame, text="Raporlar")
-        self.notebook.add(self.arac_detay_frame, text="Araç Detayları")
-        self.notebook.add(self.bakim_tamirat_frame, text="Bakım ve Tamirat")  # Yeni sekme eklendi
+        ttk.Label(add_frame, text="Plaka:", style='Subtitle.TLabel').grid(row=0, column=0, sticky="w", pady=5, padx=5)
+        self.plaka_entry = ttk.Entry(add_frame, font=self.normal_font)
+        self.plaka_entry.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
         
-        self.setup_arac_tab()
-        self.setup_yakit_tab()
-        self.setup_depo_tab()
-        self.setup_rapor_tab()
-        self.setup_arac_detay_tab()
-        self.setup_bakim_tamirat_tab()  # Yeni sekme kurulumu
-
-    def setup_arac_tab(self):
-        """Araç yönetimi sekmesini kurar"""
-        # Araç ekleme frame
-        frame = ttk.LabelFrame(self.arac_frame, text="Araç İşlemleri", padding=10)
-        frame.pack(fill=tk.X, padx=10, pady=10)
+        ttk.Label(add_frame, text="Model:", style='Subtitle.TLabel').grid(row=1, column=0, sticky="w", pady=5, padx=5)
+        self.model_entry = ttk.Entry(add_frame, font=self.normal_font)
+        self.model_entry.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
         
-        # Plaka
-        ttk.Label(frame, text="Plaka:").grid(row=0, column=0, sticky="w", pady=5)
-        self.plaka_entry = ttk.Entry(frame)
-        self.plaka_entry.grid(row=0, column=1, padx=10, pady=5, sticky="ew")
+        ttk.Label(add_frame, text="KM:", style='Subtitle.TLabel').grid(row=2, column=0, sticky="w", pady=5, padx=5)
+        self.km_entry = ttk.Entry(add_frame, font=self.normal_font)
+        self.km_entry.grid(row=2, column=1, padx=5, pady=5, sticky="ew")
         
-        # Model
-        ttk.Label(frame, text="Model:").grid(row=1, column=0, sticky="w", pady=5)
-        self.model_entry = ttk.Entry(frame)
-        self.model_entry.grid(row=1, column=1, padx=10, pady=5, sticky="ew")
+        ttk.Label(add_frame, text="Sürücü:", style='Subtitle.TLabel').grid(row=3, column=0, sticky="w", pady=5, padx=5)
+        self.driver_entry = ttk.Entry(add_frame, font=self.normal_font)
+        self.driver_entry.grid(row=3, column=1, padx=5, pady=5, sticky="ew")
         
-        # KM
-        ttk.Label(frame, text="Mevcut KM:").grid(row=2, column=0, sticky="w", pady=5)
-        self.km_entry = ttk.Entry(frame)
-        self.km_entry.grid(row=2, column=1, padx=10, pady=5, sticky="ew")
+        btn_frame = ttk.Frame(add_frame)
+        btn_frame.grid(row=4, column=0, columnspan=2, pady=10)
+        ttk.Button(btn_frame, text="Kaydet", command=self.save_vehicle, style='Primary.TButton').pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Temizle", command=self.clear_vehicle_form, style='TButton').pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Sil", command=self.delete_vehicle, style='Danger.TButton').pack(side=tk.LEFT, padx=5)
         
-        # Model Yılı
-        ttk.Label(frame, text="Model Yılı:").grid(row=0, column=2, sticky="w", pady=5)
-        self.model_yili_entry = ttk.Entry(frame)
-        self.model_yili_entry.grid(row=0, column=3, padx=10, pady=5, sticky="ew")
+        # Vehicle list
+        list_frame = ttk.LabelFrame(frame, text="Araç Listesi", padding=10)
+        list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
         
-        # Muayene Tarihi
-        ttk.Label(frame, text="Muayene Tarihi:").grid(row=1, column=2, sticky="w", pady=5)
-        self.muayene_tarihi_entry = ttk.Entry(frame)
-        self.muayene_tarihi_entry.grid(row=1, column=3, padx=10, pady=5, sticky="ew")
-        
-        # Bakım Tarihi
-        ttk.Label(frame, text="Bakım Tarihi:").grid(row=2, column=2, sticky="w", pady=5)
-        self.bakim_tarihi_entry = ttk.Entry(frame)
-        self.bakim_tarihi_entry.grid(row=2, column=3, padx=10, pady=5, sticky="ew")
-        
-        # Şoför
-        ttk.Label(frame, text="Aracın Şoförü:").grid(row=3, column=0, sticky="w", pady=5)
-        self.arac_surucusu_entry = ttk.Entry(frame)
-        self.arac_surucusu_entry.grid(row=3, column=1, padx=10, pady=5, sticky="ew")
-        
-        # Butonlar
-        btn_frame = ttk.Frame(frame)
-        btn_frame.grid(row=4, column=0, columnspan=4, pady=10)
-        
-        ttk.Button(btn_frame, text="Araç Ekle", command=self.arac_ekle).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="Araç Sil", command=self.arac_sil).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="Detayları Gör", command=self.arac_detay_goster).pack(side=tk.LEFT, padx=5)
-        
-        # Araç listesi
-        tree_frame = ttk.Frame(self.arac_frame)
-        tree_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        columns = ("Plaka", "Model", "KM", "Model Yılı", "Şoför")
-        self.arac_tree = ttk.Treeview(tree_frame, columns=columns, show="headings")
+        columns = ("Plaka", "Model", "KM", "Sürücü")
+        self.vehicle_tree = ttk.Treeview(list_frame, columns=columns, show="headings", selectmode="browse")
         
         for col in columns:
-            self.arac_tree.heading(col, text=col)
-            self.arac_tree.column(col, width=100, anchor='center')
+            self.vehicle_tree.heading(col, text=col, anchor="center")
+            self.vehicle_tree.column(col, width=120, anchor="center")
         
-        scrollbar = ttk.Scrollbar(tree_frame, orient="vertical", command=self.arac_tree.yview)
-        self.arac_tree.configure(yscrollcommand=scrollbar.set)
+        scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=self.vehicle_tree.yview)
+        self.vehicle_tree.configure(yscrollcommand=scrollbar.set)
         
-        self.arac_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.vehicle_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Alternatif satır renkleri
+        self.vehicle_tree.tag_configure('oddrow', background=self.lighter_bg)
+        self.vehicle_tree.tag_configure('evenrow', background="white")
+        
+        self.vehicle_tree.bind("<<TreeviewSelect>>", self.load_vehicle_data)
 
-    def setup_yakit_tab(self):
-        """Yakıt işlemleri sekmesini kurar"""
-        # Yakıt ekleme frame
-        frame = ttk.LabelFrame(self.yakit_frame, text="Yakıt İşlemleri", padding=10)
-        frame.pack(fill=tk.X, padx=10, pady=10)
+    def create_yakit_tab(self):
+        frame = ttk.Frame(self.notebook)
+        self.notebook.add(frame, text="Yakıt Kayıtları", padding=5)
         
-        # Araç seçimi
-        ttk.Label(frame, text="Araç:").grid(row=0, column=0, sticky="w", pady=5)
-        self.yakit_arac_combobox = ttk.Combobox(frame, state="readonly")
-        self.yakit_arac_combobox.grid(row=0, column=1, padx=10, pady=5, sticky="ew")
+        # Add fuel panel
+        add_frame = ttk.LabelFrame(frame, text="Yakıt Ekle", padding=10)
+        add_frame.pack(fill=tk.X, padx=10, pady=5)
         
-        # KM
-        ttk.Label(frame, text="KM:").grid(row=1, column=0, sticky="w", pady=5)
-        self.yakit_km_entry = ttk.Entry(frame)
-        self.yakit_km_entry.grid(row=1, column=1, padx=10, pady=5, sticky="ew")
+        ttk.Label(add_frame, text="Araç:", style='Subtitle.TLabel').grid(row=0, column=0, sticky="w", pady=5, padx=5)
+        self.fuel_vehicle_combo = ttk.Combobox(add_frame, state="readonly", font=self.normal_font)
+        self.fuel_vehicle_combo.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
         
-        # Yakıt miktarı
-        ttk.Label(frame, text="Yakıt Miktarı (L):").grid(row=2, column=0, sticky="w", pady=5)
-        self.yakit_miktar_entry = ttk.Entry(frame)
-        self.yakit_miktar_entry.grid(row=2, column=1, padx=10, pady=5, sticky="ew")
+        ttk.Label(add_frame, text="KM:", style='Subtitle.TLabel').grid(row=1, column=0, sticky="w", pady=5, padx=5)
+        self.fuel_km_entry = ttk.Entry(add_frame, font=self.normal_font)
+        self.fuel_km_entry.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
         
-        # Tarih
-        ttk.Label(frame, text="Tarih:").grid(row=3, column=0, sticky="w", pady=5)
-        self.yakit_tarih_entry = ttk.Entry(frame)
-        self.yakit_tarih_entry.insert(0, datetime.now().strftime("%d-%m-%Y %H:%M"))
-        self.yakit_tarih_entry.grid(row=3, column=1, padx=10, pady=5, sticky="ew")
+        ttk.Label(add_frame, text="Miktar (L):", style='Subtitle.TLabel').grid(row=2, column=0, sticky="w", pady=5, padx=5)
+        self.fuel_amount_entry = ttk.Entry(add_frame, font=self.normal_font)
+        self.fuel_amount_entry.grid(row=2, column=1, padx=5, pady=5, sticky="ew")
         
-        # Notlar
-        ttk.Label(frame, text="Notlar:").grid(row=4, column=0, sticky="w", pady=5)
-        self.yakit_not_entry = ttk.Entry(frame)
-        self.yakit_not_entry.grid(row=4, column=1, padx=10, pady=5, sticky="ew")
+        ttk.Label(add_frame, text="Birim Fiyat:", style='Subtitle.TLabel').grid(row=3, column=0, sticky="w", pady=5, padx=5)
+        self.fuel_price_entry = ttk.Entry(add_frame, font=self.normal_font)
+        self.fuel_price_entry.insert(0, f"{self.current_fuel_price:.2f}")
+        self.fuel_price_entry.grid(row=3, column=1, padx=5, pady=5, sticky="ew")
         
-        # Butonlar
-        btn_frame = ttk.Frame(frame)
+        ttk.Label(add_frame, text="Tarih:", style='Subtitle.TLabel').grid(row=4, column=0, sticky="w", pady=5, padx=5)
+        self.fuel_date_entry = DateEntry(add_frame, date_pattern='dd.mm.yyyy', font=self.normal_font)
+        self.fuel_date_entry.grid(row=4, column=1, padx=5, pady=5, sticky="ew")
+        
+        btn_frame = ttk.Frame(add_frame)
         btn_frame.grid(row=5, column=0, columnspan=2, pady=10)
+        ttk.Button(btn_frame, text="Kaydet", command=self.save_fuel_record, style='Primary.TButton').pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Hesapla", command=self.calculate_fuel_cost, style='TButton').pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Sil", command=self.delete_fuel_record, style='Danger.TButton').pack(side=tk.LEFT, padx=5)
         
-        ttk.Button(btn_frame, text="Yakıt Ekle", command=self.yakit_ekle).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="Kayıt Sil", command=self.yakit_kaydi_sil).pack(side=tk.LEFT, padx=5)
+        # Fuel records list
+        list_frame = ttk.LabelFrame(frame, text="Yakıt Kayıtları", padding=10)
+        list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
         
-        # Yakıt kayıtları listesi
-        tree_frame = ttk.Frame(self.yakit_frame)
-        tree_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        columns = ("Tarih", "Plaka", "KM", "Miktar", "Not")
-        self.yakit_tree = ttk.Treeview(tree_frame, columns=columns, show="headings")
+        columns = ("ID", "Tarih", "Plaka", "KM", "Miktar", "Birim Fiyat", "Toplam")
+        self.fuel_tree = ttk.Treeview(list_frame, columns=columns, show="headings", selectmode="browse")
         
         for col in columns:
-            self.yakit_tree.heading(col, text=col)
-            self.yakit_tree.column(col, width=100, anchor='center')
+            self.fuel_tree.heading(col, text=col, anchor="center")
+            self.fuel_tree.column(col, width=100, anchor="center")
         
-        scrollbar = ttk.Scrollbar(tree_frame, orient="vertical", command=self.yakit_tree.yview)
-        self.yakit_tree.configure(yscrollcommand=scrollbar.set)
+        scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=self.fuel_tree.yview)
+        self.fuel_tree.configure(yscrollcommand=scrollbar.set)
         
-        self.yakit_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.fuel_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Alternatif satır renkleri
+        self.fuel_tree.tag_configure('oddrow', background=self.lighter_bg)
+        self.fuel_tree.tag_configure('evenrow', background="white")
+        
+        self.fuel_tree.bind("<<TreeviewSelect>>", self.load_fuel_data)
 
-    def setup_depo_tab(self):
-        """Depo yönetimi sekmesini kurar"""
-        # Depo dolum frame
-        frame = ttk.LabelFrame(self.depo_frame, text="Depo İşlemleri", padding=10)
-        frame.pack(fill=tk.X, padx=10, pady=10)
-        
-        # Miktar
-        ttk.Label(frame, text="Miktar (L):").grid(row=0, column=0, sticky="w", pady=5)
-        self.depo_miktar_entry = ttk.Entry(frame)
-        self.depo_miktar_entry.grid(row=0, column=1, padx=10, pady=5, sticky="ew")
-        
-        # Tarih
-        ttk.Label(frame, text="Tarih:").grid(row=1, column=0, sticky="w", pady=5)
-        self.depo_tarih_entry = ttk.Entry(frame)
-        self.depo_tarih_entry.insert(0, datetime.now().strftime("%d-%m-%Y %H:%M"))
-        self.depo_tarih_entry.grid(row=1, column=1, padx=10, pady=5, sticky="ew")
-        
-        # Notlar
-        ttk.Label(frame, text="Notlar:").grid(row=2, column=0, sticky="w", pady=5)
-        self.depo_not_entry = ttk.Entry(frame)
-        self.depo_not_entry.grid(row=2, column=1, padx=10, pady=5, sticky="ew")
-        
-        # Butonlar
-        btn_frame = ttk.Frame(frame)
-        btn_frame.grid(row=3, column=0, columnspan=2, pady=10)
-        
-        ttk.Button(btn_frame, text="Depo Doldur", command=self.depo_doldur).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="Kayıt Sil", command=self.depo_dolum_sil).pack(side=tk.LEFT, padx=5)
-        
-        # Depo durumu
-        self.depo_durum_label = ttk.Label(
-            frame, 
-            text="Depo Durumu: Yükleniyor...", 
-            font=('Helvetica', 10, 'bold')
+    def create_depo_tab(self):
+        """Yakıt Deposu sekmesini oluşturur - Çıkış işlemi kaldırıldı"""
+        frame = ttk.Frame(self.notebook)
+        self.notebook.add(frame, text="Yakıt Deposu", padding=5)
+
+        # 1. DEPO DURUM PANELİ (Üst kısma ekleyin)
+        status_frame = ttk.LabelFrame(frame, text="Anlık Depo Durumu", padding=10)
+        status_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        # Yakıt bilgisi etiketi
+        self.fuel_level_var = tk.StringVar()
+        self.fuel_level_label = ttk.Label(
+            status_frame,
+            textvariable=self.fuel_level_var,
+            font=('Segoe UI', 12, 'bold'),
+            foreground="#2c3e50"
         )
-        self.depo_durum_label.grid(row=4, column=0, columnspan=2, pady=10)
-        
-        # Depo dolum kayıtları
-        tree_frame = ttk.Frame(self.depo_frame)
-        tree_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        columns = ("Tarih", "Miktar", "Not")
-        self.depo_tree = ttk.Treeview(tree_frame, columns=columns, show="headings")
-        
+        self.fuel_level_label.pack(side=tk.LEFT, padx=10, pady=5)
+
+        # Yakıt seviyesi (cm) etiketi
+        self.fuel_cm_var = tk.StringVar()
+        self.fuel_cm_label = ttk.Label(
+            status_frame,
+            textvariable=self.fuel_cm_var,
+            font=('Segoe UI', 12, 'bold'),
+            foreground="#3498db"
+        )
+        self.fuel_cm_label.pack(side=tk.LEFT, padx=10, pady=5)
+
+        # Başlangıç değerlerini güncelle
+        self.update_fuel_level()
+
+        # 2. DEPO İŞLEMLERİ PANELİ (Sadece giriş işlemi)
+        add_frame = ttk.LabelFrame(frame, text="Depo Doldurma İşlemleri", padding=10)
+        add_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        # Miktar girişi
+        ttk.Label(add_frame, text="Miktar (L):", style='Subtitle.TLabel').grid(row=0, column=0, sticky="w", pady=5, padx=5)
+        self.depo_amount_entry = ttk.Entry(add_frame, font=self.normal_font)
+        self.depo_amount_entry.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
+
+        # Fiyat girişi
+        ttk.Label(add_frame, text="Birim Fiyat:", style='Subtitle.TLabel').grid(row=1, column=0, sticky="w", pady=5, padx=5)
+        self.depo_price_entry = ttk.Entry(add_frame, font=self.normal_font)
+        self.depo_price_entry.insert(0, f"{self.current_fuel_price:.2f}")
+        self.depo_price_entry.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
+
+        # Tarih seçici
+        ttk.Label(add_frame, text="Tarih:", style='Subtitle.TLabel').grid(row=2, column=0, sticky="w", pady=5, padx=5)
+        self.depo_date_entry = DateEntry(add_frame, date_pattern='dd.mm.yyyy', font=self.normal_font)
+        self.depo_date_entry.grid(row=2, column=1, padx=5, pady=5, sticky="ew")
+
+        # Not alanı
+        ttk.Label(add_frame, text="Not:", style='Subtitle.TLabel').grid(row=3, column=0, sticky="w", pady=5, padx=5)
+        self.depo_notes_entry = ttk.Entry(add_frame, font=self.normal_font)
+        self.depo_notes_entry.grid(row=3, column=1, padx=5, pady=5, sticky="ew")
+
+        # Butonlar
+        btn_frame = ttk.Frame(add_frame)
+        btn_frame.grid(row=4, column=0, columnspan=2, pady=10)
+
+        ttk.Button(
+            btn_frame,
+            text="Depoyu Doldur",
+            command=self.save_depo_record,
+            style='Primary.TButton'
+        ).pack(side=tk.LEFT, padx=5)
+
+        ttk.Button(
+            btn_frame,
+            text="Hesapla",
+            command=self.calculate_depo_cost,
+            style='TButton'
+        ).pack(side=tk.LEFT, padx=5)
+
+        ttk.Button(
+            btn_frame,
+            text="Sil",
+            command=self.delete_depo_record,
+            style='Danger.TButton'
+        ).pack(side=tk.LEFT, padx=5)
+
+        # 3. DEPO HAREKET LİSTESİ (Sadece giriş işlemleri)
+        list_frame = ttk.LabelFrame(frame, text="Depo Doldurma Kayıtları", padding=10)
+        list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+
+        # Treeview sütunları
+        columns = ("ID", "Tarih", "Miktar (L)", "Birim Fiyat", "Toplam", "Not")
+        self.depo_tree = ttk.Treeview(
+            list_frame,
+            columns=columns,
+            show="headings",
+            selectmode="browse"
+        )
+
+        # Sütun başlıkları
         for col in columns:
-            self.depo_tree.heading(col, text=col)
-            self.depo_tree.column(col, width=120, anchor='center')
-        
-        scrollbar = ttk.Scrollbar(tree_frame, orient="vertical", command=self.depo_tree.yview)
+            self.depo_tree.heading(col, text=col, anchor="center")
+            self.depo_tree.column(col, width=100, anchor="center")
+
+        # Scrollbar
+        scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=self.depo_tree.yview)
         self.depo_tree.configure(yscrollcommand=scrollbar.set)
-        
+
         self.depo_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-    def setup_rapor_tab(self):
-        """Raporlar sekmesini kurar"""
-        # Filtreleme frame
-        filter_frame = ttk.Frame(self.rapor_frame)
-        filter_frame.pack(fill=tk.X, padx=10, pady=10)
-        
-        # Araç filtresi
-        ttk.Label(filter_frame, text="Araç:").pack(side=tk.LEFT)
-        self.rapor_arac_combobox = ttk.Combobox(filter_frame, state="readonly")
-        self.rapor_arac_combobox.pack(side=tk.LEFT, padx=5)
-        
-        # Ay filtresi
-        ttk.Label(filter_frame, text="Ay:").pack(side=tk.LEFT)
-        self.rapor_ay_combobox = ttk.Combobox(filter_frame)
-        self.rapor_ay_combobox.pack(side=tk.LEFT, padx=5)
-        
-        # Filtrele butonu
-        ttk.Button(filter_frame, text="Filtrele", command=self.filtrele).pack(side=tk.LEFT, padx=5)
-        
-        # Grafik butonları
-        ttk.Button(filter_frame, text="Grafik Oluştur", command=self.show_data_analysis).pack(side=tk.RIGHT)
-        
-        # İstatistikler frame
-        stats_frame = ttk.Frame(self.rapor_frame)
-        stats_frame.pack(fill=tk.X, padx=10, pady=5)
-        
-        self.ortalama_tuketim_label = ttk.Label(
-            stats_frame, 
-            text="Genel Ortalama (L/100km): -", 
-            font=('Helvetica', 9)
-        )
-        self.ortalama_tuketim_label.pack(side=tk.LEFT, padx=10)
-        
-        self.aylik_ortalama_label = ttk.Label(
-            stats_frame, 
-            text="Aylık Ortalama (L/100km): -", 
-            font=('Helvetica', 9)
-        )
-        self.aylik_ortalama_label.pack(side=tk.LEFT, padx=10)
-        
-        self.yillik_ortalama_label = ttk.Label(
-            stats_frame, 
-            text="Yıllık Ortalama (L/100km): -", 
-            font=('Helvetica', 9)
-        )
-        self.yillik_ortalama_label.pack(side=tk.LEFT, padx=10)
-        
-        # Rapor tablosu
-        tree_frame = ttk.Frame(self.rapor_frame)
-        tree_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        columns = ("Tarih", "Plaka", "KM", "Miktar", "Not")
-        self.rapor_tree = ttk.Treeview(tree_frame, columns=columns, show="headings")
-        
-        for col in columns:
-            self.rapor_tree.heading(col, text=col)
-            self.rapor_tree.column(col, width=100, anchor='center')
-        
-        scrollbar = ttk.Scrollbar(tree_frame, orient="vertical", command=self.rapor_tree.yview)
-        self.rapor_tree.configure(yscrollcommand=scrollbar.set)
-        
-        self.rapor_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        # Satır renkleri
+        self.depo_tree.tag_configure('oddrow', background=self.lighter_bg)
+        self.depo_tree.tag_configure('evenrow', background="white")
 
-    def setup_arac_detay_tab(self):
-        """Araç detayları sekmesini kurar"""
-        # Sol frame - Araç seçimi ve bilgileri
-        left_frame = ttk.Frame(self.arac_detay_frame)
-        left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=10, pady=10)
-        
-        # Araç seçimi
-        ttk.Label(left_frame, text="Araç Seçin:").pack(pady=5)
-        self.arac_detay_combobox = ttk.Combobox(left_frame, state="readonly")
-        self.arac_detay_combobox.pack(fill=tk.X, pady=5)
-        ttk.Button(left_frame, text="Araç Bilgilerini Getir", command=self.arac_detay_getir).pack(pady=10)
-        
-        # Araç bilgileri
-        info_frame = ttk.LabelFrame(left_frame, text="Araç Bilgileri", padding=10)
-        info_frame.pack(fill=tk.X, pady=10)
-        
-        self.arac_detay_labels = {}
-        fields = [
-            ("Plaka", "plaka"),
-            ("Model", "model"),
-            ("KM", "mevcut_km"),
-            ("Model Yılı", "model_yili"),
-            ("Muayene Tarihi", "muayene_tarihi"),
-            ("Bakım Tarihi", "bakim_tarihi"),
-            ("Şoför", "arac_surucusu")
-        ]
-        
-        for text, key in fields:
-            frame = ttk.Frame(info_frame)
-            frame.pack(fill=tk.X, pady=2)
-            ttk.Label(frame, text=f"{text}:", width=12).pack(side=tk.LEFT)
-            self.arac_detay_labels[key] = ttk.Label(frame, text="-", font=('Helvetica', 9, 'bold'))
-            self.arac_detay_labels[key].pack(side=tk.LEFT)
-        
-        # Uyarılar
-        warning_frame = ttk.LabelFrame(left_frame, text="Uyarılar", padding=10)
-        warning_frame.pack(fill=tk.X, pady=10)
-        
-        self.uyari_label = ttk.Label(
-            warning_frame, 
-            text="Araç seçiniz...", 
-            font=('Helvetica', 9),
-            wraplength=250
-        )
-        self.uyari_label.pack(fill=tk.X)
-        
-        # Sağ frame - Araç detayları güncelleme
-        right_frame = ttk.Frame(self.arac_detay_frame)
-        right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        update_frame = ttk.LabelFrame(right_frame, text="Araç Bilgilerini Güncelle", padding=10)
-        update_frame.pack(fill=tk.X, pady=10)
-        
-        # Güncelleme formu
-        self.update_entries = {}
-        row = 0
-        for text, key in fields[3:]:  # Model yılı ve sonrası
-            ttk.Label(update_frame, text=text).grid(row=row, column=0, sticky="w", pady=5)
-            self.update_entries[key] = ttk.Entry(update_frame)
-            self.update_entries[key].grid(row=row, column=1, padx=10, pady=5, sticky="ew")
-            row += 1
-        
-        # Güncelleme butonu
-        ttk.Button(
-            update_frame, 
-            text="Bilgileri Güncelle", 
-            command=self.arac_detay_guncelle
-        ).grid(row=row, column=0, columnspan=2, pady=10)
-        
-        # Yakıt kayıtları
-        fuel_frame = ttk.LabelFrame(right_frame, text="Son Yakıt Kayıtları", padding=10)
-        fuel_frame.pack(fill=tk.BOTH, expand=True, pady=10)
-        
-        columns = ("Tarih", "KM", "Miktar", "Not")
-        self.arac_yakit_tree = ttk.Treeview(fuel_frame, columns=columns, show="headings")
-        
-        for col in columns:
-            self.arac_yakit_tree.heading(col, text=col)
-            self.arac_yakit_tree.column(col, width=100, anchor='center')
-        
-        scrollbar = ttk.Scrollbar(fuel_frame, orient="vertical", command=self.arac_yakit_tree.yview)
-        self.arac_yakit_tree.configure(yscrollcommand=scrollbar.set)
-        
-        self.arac_yakit_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        # Seçim olayı
+        self.depo_tree.bind("<<TreeviewSelect>>", self.load_depo_data)
 
-    def setup_bakim_tamirat_tab(self):
-        """Bakım ve tamirat sekmesini kurar"""
-        # Sol frame - Araç seçimi ve bakım kayıtları
-        left_frame = ttk.Frame(self.bakim_tamirat_frame)
-        left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=10, pady=10)
+        # Başlangıç verilerini yükle
+        self.load_depo_records()
+
+
+    def create_bakim_tab(self):
+        frame = ttk.Frame(self.notebook)
+        self.notebook.add(frame, text="Bakım Kayıtları", padding=5)
         
-        # Araç seçimi
-        ttk.Label(left_frame, text="Araç Seçin:").pack(pady=5)
-        self.bakim_arac_combobox = ttk.Combobox(left_frame, state="readonly")
-        self.bakim_arac_combobox.pack(fill=tk.X, pady=5)
-        ttk.Button(left_frame, text="Bakım Kayıtlarını Getir", command=self.bakim_kayitlarini_getir).pack(pady=10)
+        # Add maintenance panel
+        add_frame = ttk.LabelFrame(frame, text="Bakım Ekle", padding=10)
+        add_frame.pack(fill=tk.X, padx=10, pady=5)
         
-        # Bakım kayıtları listesi
-        tree_frame = ttk.LabelFrame(left_frame, text="Bakım Kayıtları", padding=10)
-        tree_frame.pack(fill=tk.BOTH, expand=True, pady=10)
+        ttk.Label(add_frame, text="Araç:", style='Subtitle.TLabel').grid(row=0, column=0, sticky="w", pady=5, padx=5)
+        self.maintenance_vehicle_combo = ttk.Combobox(add_frame, state="readonly", font=self.normal_font)
+        self.maintenance_vehicle_combo.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
         
-        columns = ("Tarih", "Arıza", "İşlem", "Toplam Tutar")
-        self.bakim_tree = ttk.Treeview(tree_frame, columns=columns, show="headings")
+        ttk.Label(add_frame, text="KM:", style='Subtitle.TLabel').grid(row=1, column=0, sticky="w", pady=5, padx=5)
+        self.maintenance_km_entry = ttk.Entry(add_frame, font=self.normal_font)
+        self.maintenance_km_entry.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
+        
+        ttk.Label(add_frame, text="Tespit Edilen Arıza:", style='Subtitle.TLabel').grid(row=2, column=0, sticky="w", pady=5, padx=5)
+        self.maintenance_fault_entry = ttk.Entry(add_frame, font=self.normal_font)
+        self.maintenance_fault_entry.grid(row=2, column=1, padx=5, pady=5, sticky="ew")
+        
+        ttk.Label(add_frame, text="Yapılan İşlem:", style='Subtitle.TLabel').grid(row=3, column=0, sticky="w", pady=5, padx=5)
+        self.maintenance_repair_entry = ttk.Entry(add_frame, font=self.normal_font)
+        self.maintenance_repair_entry.grid(row=3, column=1, padx=5, pady=5, sticky="ew")
+        
+        ttk.Label(add_frame, text="İşçilik Tutarı:", style='Subtitle.TLabel').grid(row=4, column=0, sticky="w", pady=5, padx=5)
+        self.maintenance_labor_cost_entry = ttk.Entry(add_frame, font=self.normal_font)
+        self.maintenance_labor_cost_entry.grid(row=4, column=1, padx=5, pady=5, sticky="ew")
+        
+        ttk.Label(add_frame, text="Malzeme Tutarı:", style='Subtitle.TLabel').grid(row=5, column=0, sticky="w", pady=5, padx=5)
+        self.maintenance_material_cost_entry = ttk.Entry(add_frame, font=self.normal_font)
+        self.maintenance_material_cost_entry.grid(row=5, column=1, padx=5, pady=5, sticky="ew")
+        
+        ttk.Label(add_frame, text="Tarih:", style='Subtitle.TLabel').grid(row=6, column=0, sticky="w", pady=5, padx=5)
+        self.maintenance_date_entry = DateEntry(add_frame, date_pattern='dd.mm.yyyy', font=self.normal_font)
+        self.maintenance_date_entry.grid(row=6, column=1, padx=5, pady=5, sticky="ew")
+        
+        btn_frame = ttk.Frame(add_frame)
+        btn_frame.grid(row=7, column=0, columnspan=2, pady=10)
+        ttk.Button(btn_frame, text="Kaydet", command=self.save_maintenance, style='Primary.TButton').pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Temizle", command=self.clear_maintenance_form, style='TButton').pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Sil", command=self.delete_maintenance, style='Danger.TButton').pack(side=tk.LEFT, padx=5)
+        
+        # Maintenance records list
+        list_frame = ttk.LabelFrame(frame, text="Bakım Kayıtları", padding=10)
+        list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        
+        columns = ("ID", "Tarih", "Plaka", "KM", "Arıza", "Yapılan İşlem", "İşçilik", "Malzeme", "Toplam")
+        self.maintenance_tree = ttk.Treeview(list_frame, columns=columns, show="headings", selectmode="browse")
         
         for col in columns:
-            self.bakim_tree.heading(col, text=col)
-            self.bakim_tree.column(col, width=100, anchor='center')
+            self.maintenance_tree.heading(col, text=col, anchor="center")
+            self.maintenance_tree.column(col, width=100, anchor="center")
         
-        scrollbar = ttk.Scrollbar(tree_frame, orient="vertical", command=self.bakim_tree.yview)
-        self.bakim_tree.configure(yscrollcommand=scrollbar.set)
+        scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=self.maintenance_tree.yview)
+        self.maintenance_tree.configure(yscrollcommand=scrollbar.set)
         
-        self.bakim_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.maintenance_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
-        # Butonlar
+        # Alternatif satır renkleri
+        self.maintenance_tree.tag_configure('oddrow', background=self.lighter_bg)
+        self.maintenance_tree.tag_configure('evenrow', background="white")
+        
+        self.maintenance_tree.bind("<<TreeviewSelect>>", self.load_maintenance_data)
+
+    def create_muayene_bakim_tab(self):
+        frame = ttk.Frame(self.notebook)
+        self.notebook.add(frame, text="Muayene ve Bakım", padding=5)
+        
+        # Main frame
+        main_frame = ttk.Frame(frame)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        
+        # Left frame - Inspection
+        left_frame = ttk.LabelFrame(main_frame, text="Muayene Ekle", padding=10)
+        left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        ttk.Label(left_frame, text="Araç:", style='Subtitle.TLabel').grid(row=0, column=0, sticky="w", pady=5, padx=5)
+        self.inspection_vehicle_combo = ttk.Combobox(left_frame, state="readonly", font=self.normal_font)
+        self.inspection_vehicle_combo.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
+        
+        ttk.Label(left_frame, text="KM:", style='Subtitle.TLabel').grid(row=1, column=0, sticky="w", pady=5, padx=5)
+        self.inspection_km_entry = ttk.Entry(left_frame, font=self.normal_font)
+        self.inspection_km_entry.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
+        
+        ttk.Label(left_frame, text="Tarih:", style='Subtitle.TLabel').grid(row=2, column=0, sticky="w", pady=5, padx=5)
+        self.inspection_date_entry = DateEntry(left_frame, date_pattern='dd.mm.yyyy', font=self.normal_font)
+        self.inspection_date_entry.grid(row=2, column=1, padx=5, pady=5, sticky="ew")
+        
+        ttk.Label(left_frame, text="Sonraki Muayene:", style='Subtitle.TLabel').grid(row=3, column=0, sticky="w", pady=5, padx=5)
+        self.next_inspection_date_entry = DateEntry(left_frame, date_pattern='dd.mm.yyyy', font=self.normal_font)
+        self.next_inspection_date_entry.grid(row=3, column=1, padx=5, pady=5, sticky="ew")
+        
         btn_frame = ttk.Frame(left_frame)
-        btn_frame.pack(fill=tk.X, pady=5)
+        btn_frame.grid(row=4, column=0, columnspan=2, pady=10)
+        ttk.Button(btn_frame, text="Kaydet", command=self.save_inspection, style='Primary.TButton').pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Temizle", command=self.clear_inspection_form, style='TButton').pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Sil", command=self.delete_inspection, style='Danger.TButton').pack(side=tk.LEFT, padx=5)
         
-        ttk.Button(btn_frame, text="Kayıt Sil", command=self.bakim_kaydi_sil).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="Kayıt Düzenle", command=self.bakim_kaydi_duzenle).pack(side=tk.LEFT, padx=5)
+        # Right frame - Periodic Maintenance
+        right_frame = ttk.LabelFrame(main_frame, text="Periyodik Bakım Ekle", padding=10)
+        right_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
         
-        # Sağ frame - Yeni bakım kaydı ekleme
-        right_frame = ttk.Frame(self.bakim_tamirat_frame)
-        right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=10, pady=10)
+        ttk.Label(right_frame, text="Araç:", style='Subtitle.TLabel').grid(row=0, column=0, sticky="w", pady=5, padx=5)
+        self.maintenance_vehicle_combo2 = ttk.Combobox(right_frame, state="readonly", font=self.normal_font)
+        self.maintenance_vehicle_combo2.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
         
-        form_frame = ttk.LabelFrame(right_frame, text="Yeni Bakım/Tamirat Kaydı", padding=10)
-        form_frame.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(right_frame, text="KM:", style='Subtitle.TLabel').grid(row=1, column=0, sticky="w", pady=5, padx=5)
+        self.maintenance_km_entry2 = ttk.Entry(right_frame, font=self.normal_font)
+        self.maintenance_km_entry2.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
         
-        # Form alanları
-        ttk.Label(form_frame, text="Tarih:").grid(row=0, column=0, sticky="w", pady=5)
-        self.bakim_tarih_entry = ttk.Entry(form_frame)
-        self.bakim_tarih_entry.insert(0, datetime.now().strftime("%d-%m-%Y"))
-        self.bakim_tarih_entry.grid(row=0, column=1, padx=10, pady=5, sticky="ew")
+        ttk.Label(right_frame, text="Tarih:", style='Subtitle.TLabel').grid(row=2, column=0, sticky="w", pady=5, padx=5)
+        self.maintenance_date_entry2 = DateEntry(right_frame, date_pattern='dd.mm.yyyy', font=self.normal_font)
+        self.maintenance_date_entry2.grid(row=2, column=1, padx=5, pady=5, sticky="ew")
         
-        ttk.Label(form_frame, text="Saat:").grid(row=1, column=0, sticky="w", pady=5)
-        self.bakim_saat_entry = ttk.Entry(form_frame)
-        self.bakim_saat_entry.insert(0, datetime.now().strftime("%H:%M"))
-        self.bakim_saat_entry.grid(row=1, column=1, padx=10, pady=5, sticky="ew")
+        ttk.Label(right_frame, text="Sonraki Bakım KM:", style='Subtitle.TLabel').grid(row=3, column=0, sticky="w", pady=5, padx=5)
+        self.next_maintenance_km_entry = ttk.Entry(right_frame, font=self.normal_font)
+        self.next_maintenance_km_entry.grid(row=3, column=1, padx=5, pady=5, sticky="ew")
         
-        ttk.Label(form_frame, text="Tespit Edilen Arıza:").grid(row=2, column=0, sticky="w", pady=5)
-        self.bakim_ariza_entry = ttk.Entry(form_frame)
-        self.bakim_ariza_entry.grid(row=2, column=1, padx=10, pady=5, sticky="ew")
+        ttk.Label(right_frame, text="Sonraki Bakım Tarihi:", style='Subtitle.TLabel').grid(row=4, column=0, sticky="w", pady=5, padx=5)
+        self.next_maintenance_date_entry = DateEntry(right_frame, date_pattern='dd.mm.yyyy', font=self.normal_font)
+        self.next_maintenance_date_entry.grid(row=4, column=1, padx=5, pady=5, sticky="ew")
         
-        ttk.Label(form_frame, text="Yapılan İşlem:").grid(row=3, column=0, sticky="w", pady=5)
-        self.bakim_islem_entry = ttk.Entry(form_frame)
-        self.bakim_islem_entry.grid(row=3, column=1, padx=10, pady=5, sticky="ew")
+        btn_frame2 = ttk.Frame(right_frame)
+        btn_frame2.grid(row=5, column=0, columnspan=2, pady=10)
+        ttk.Button(btn_frame2, text="Kaydet", command=self.save_periodic_maintenance, style='Primary.TButton').pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame2, text="Temizle", command=self.clear_periodic_maintenance_form, style='TButton').pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame2, text="Sil", command=self.delete_periodic_maintenance, style='Danger.TButton').pack(side=tk.LEFT, padx=5)
         
-        ttk.Label(form_frame, text="Parça Ücreti:").grid(row=4, column=0, sticky="w", pady=5)
-        self.bakim_parca_ucreti_entry = ttk.Entry(form_frame)
-        self.bakim_parca_ucreti_entry.insert(0, "0")
-        self.bakim_parca_ucreti_entry.grid(row=4, column=1, padx=10, pady=5, sticky="ew")
+        # Inspection records list
+        list_frame = ttk.LabelFrame(frame, text="Muayene ve Bakım Kayıtları", padding=10)
+        list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
         
-        ttk.Label(form_frame, text="İşçilik Ücreti:").grid(row=5, column=0, sticky="w", pady=5)
-        self.bakim_iscilik_ucreti_entry = ttk.Entry(form_frame)
-        self.bakim_iscilik_ucreti_entry.insert(0, "0")
-        self.bakim_iscilik_ucreti_entry.grid(row=5, column=1, padx=10, pady=5, sticky="ew")
+        columns = ("ID", "Tarih", "Plaka", "KM", "Sonraki Muayene", "Sonraki Bakım", "Sonraki Bakım KM")
+        self.inspection_tree = ttk.Treeview(list_frame, columns=columns, show="headings", selectmode="browse")
         
-        ttk.Label(form_frame, text="Toplam Tutar:").grid(row=6, column=0, sticky="w", pady=5)
-        self.bakim_toplam_tutar_entry = ttk.Entry(form_frame, state="readonly")
-        self.bakim_toplam_tutar_entry.grid(row=6, column=1, padx=10, pady=5, sticky="ew")
+        for col in columns:
+            self.inspection_tree.heading(col, text=col, anchor="center")
+            self.inspection_tree.column(col, width=120, anchor="center")
         
-        ttk.Label(form_frame, text="Güncel KM:").grid(row=7, column=0, sticky="w", pady=5)
-        self.bakim_notlar_entry = ttk.Entry(form_frame)
-        self.bakim_notlar_entry.grid(row=7, column=1, padx=10, pady=5, sticky="ew")
+        scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=self.inspection_tree.yview)
+        self.inspection_tree.configure(yscrollcommand=scrollbar.set)
         
-        # Toplam tutarı hesapla butonu
-        ttk.Button(
-            form_frame, 
-            text="Toplamı Hesapla", 
-            command=self.bakim_toplam_hesapla
-        ).grid(row=8, column=0, columnspan=2, pady=5)
+        self.inspection_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
-        # Kaydet butonu
-        ttk.Button(
-            form_frame, 
-            text="Kaydet", 
-            command=self.bakim_kaydi_ekle
-        ).grid(row=9, column=0, columnspan=2, pady=10)
+        # Alternatif satır renkleri
+        self.inspection_tree.tag_configure('oddrow', background=self.lighter_bg)
+        self.inspection_tree.tag_configure('evenrow', background="white")
         
-        # Ücret alanlarına değişiklik izleme ekle
-        self.bakim_parca_ucreti_entry.bind("<KeyRelease>", lambda e: self.bakim_toplam_hesapla())
-        self.bakim_iscilik_ucreti_entry.bind("<KeyRelease>", lambda e: self.bakim_toplam_hesapla())
+        self.inspection_tree.bind("<<TreeviewSelect>>", self.load_inspection_data)
 
-    def create_status_bar(self):
-        """Durum çubuğunu oluşturur"""
-        self.status_bar = ttk.Frame(self.root)
-        self.status_bar.pack(fill=tk.X, padx=10, pady=5)
+    def create_rapor_tab(self):
+        frame = ttk.Frame(self.notebook)
+        self.notebook.add(frame, text="Raporlar", padding=5)
         
-        ttk.Label(self.status_bar, text=f"Veritabanı: {os.path.basename(self.db_path)}").pack(side=tk.LEFT)
+        # Filter panel
+        filter_frame = ttk.LabelFrame(frame, text="Filtrele", padding=10)
+        filter_frame.pack(fill=tk.X, padx=10, pady=5)
         
-        self.status_message = ttk.Label(self.status_bar, text="Hazır")
-        self.status_message.pack(side=tk.LEFT, padx=20)
+        ttk.Label(filter_frame, text="Araç:", style='Subtitle.TLabel').grid(row=0, column=0, sticky="w", pady=5, padx=5)
+        self.report_vehicle_combo = ttk.Combobox(filter_frame, state="readonly", font=self.normal_font)
+        self.report_vehicle_combo.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
         
-        ttk.Label(
-            self.status_bar, 
-            text=f"Son Güncelleme: {datetime.now().strftime('%d.%m.%Y %H:%M')}"
-        ).pack(side=tk.RIGHT)
+        ttk.Label(filter_frame, text="Başlangıç Tarihi:", style='Subtitle.TLabel').grid(row=1, column=0, sticky="w", pady=5, padx=5)
+        self.start_date_entry = DateEntry(filter_frame, date_pattern='dd.mm.yyyy', font=self.normal_font)
+        self.start_date_entry.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
+        
+        ttk.Label(filter_frame, text="Bitiş Tarihi:", style='Subtitle.TLabel').grid(row=2, column=0, sticky="w", pady=5, padx=5)
+        self.end_date_entry = DateEntry(filter_frame, date_pattern='dd.mm.yyyy', font=self.normal_font)
+        self.end_date_entry.grid(row=2, column=1, padx=5, pady=5, sticky="ew")
+        
+        ttk.Label(filter_frame, text="Rapor Türü:", style='Subtitle.TLabel').grid(row=3, column=0, sticky="w", pady=5, padx=5)
+        self.report_type_combo = ttk.Combobox(filter_frame, values=["Yakıt", "Bakım", "Muayene"], state="readonly", font=self.normal_font)
+        self.report_type_combo.grid(row=3, column=1, padx=5, pady=5, sticky="ew")
+        self.report_type_combo.current(0)
+        
+        btn_frame = ttk.Frame(filter_frame)
+        btn_frame.grid(row=4, column=0, columnspan=2, pady=10)
+        ttk.Button(btn_frame, text="Filtrele", command=self.filter_reports, style='Primary.TButton').pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Grafik Oluştur", command=self.show_consumption_graph, style='Success.TButton').pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Excel'e Aktar", command=self.export_filtered_report_to_excel, style='Success.TButton').pack(side=tk.LEFT, padx=5)
+        
+        # Report list
+        list_frame = ttk.LabelFrame(frame, text="Rapor", padding=10)
+        list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        
+        self.report_tree = ttk.Treeview(list_frame, show="headings", selectmode="browse")
+        self.report_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=self.report_tree.yview)
+        self.report_tree.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Alternatif satır renkleri
+        self.report_tree.tag_configure('oddrow', background=self.lighter_bg)
+        self.report_tree.tag_configure('evenrow', background="white")
+
+    def create_maliyet_tab(self):
+        frame = ttk.Frame(self.notebook)
+        self.notebook.add(frame, text="Maliyet Hesaplama", padding=5)
+        
+        # Cost calculation panel
+        cost_frame = ttk.LabelFrame(frame, text="Yakıt Maliyeti Hesaplama", padding=10)
+        cost_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        ttk.Label(cost_frame, text="Araç:", style='Subtitle.TLabel').grid(row=0, column=0, sticky="w", pady=5, padx=5)
+        self.cost_vehicle_combo = ttk.Combobox(cost_frame, state="readonly", font=self.normal_font)
+        self.cost_vehicle_combo.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
+        
+        ttk.Label(cost_frame, text="Başlangıç Tarihi:", style='Subtitle.TLabel').grid(row=1, column=0, sticky="w", pady=5, padx=5)
+        self.cost_start_date_entry = DateEntry(cost_frame, date_pattern='dd.mm.yyyy', font=self.normal_font)
+        self.cost_start_date_entry.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
+        
+        ttk.Label(cost_frame, text="Bitiş Tarihi:", style='Subtitle.TLabel').grid(row=2, column=0, sticky="w", pady=5, padx=5)
+        self.cost_end_date_entry = DateEntry(cost_frame, date_pattern='dd.mm.yyyy', font=self.normal_font)
+        self.cost_end_date_entry.grid(row=2, column=1, padx=5, pady=5, sticky="ew")
+        
+        btn_frame = ttk.Frame(cost_frame)
+        btn_frame.grid(row=3, column=0, columnspan=2, pady=10)
+        ttk.Button(btn_frame, text="Hesapla", command=self.calculate_cost, style='Primary.TButton').pack(side=tk.LEFT, padx=5)
+        
+        # Results
+        result_frame = ttk.LabelFrame(frame, text="Sonuçlar", padding=10)
+        result_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        
+        columns = ("Araç Plakası", "Toplam Yakıt (L)", "Toplam Maliyet (TL)", "Ortalama Tüketim (L/100km)")
+        self.cost_tree = ttk.Treeview(result_frame, columns=columns, show="headings", selectmode="browse")
+        
+        for col in columns:
+            self.cost_tree.heading(col, text=col, anchor="center")
+            self.cost_tree.column(col, width=150, anchor="center")
+        
+        scrollbar = ttk.Scrollbar(result_frame, orient="vertical", command=self.cost_tree.yview)
+        self.cost_tree.configure(yscrollcommand=scrollbar.set)
+        
+        self.cost_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Alternatif satır renkleri
+        self.cost_tree.tag_configure('oddrow', background=self.lighter_bg)
+        self.cost_tree.tag_configure('evenrow', background="white")
 
     def load_initial_data(self):
-        """Başlangıç verilerini yükler"""
-        try:
-            self.arac_listesini_guncelle()
-            self.depo_durumunu_guncelle()
-            self.yakit_kayitlarini_yukle()
-            self.depo_kayitlarini_yukle()
-            self.rapor_arac_combobox_guncelle()
-            self.rapor_ay_combobox_guncelle()
-            self.arac_detay_combobox_guncelle()
-            self.bakim_arac_combobox_guncelle()
-        except Exception as e:
-            self.show_error(f"Başlangıç verileri yüklenirken hata: {str(e)}")
-
-    def arac_listesini_guncelle(self):
-        """Araç listesini yeniler"""
-        for row in self.arac_tree.get_children():
-            self.arac_tree.delete(row)
+        self.load_vehicles()
+        self.load_fuel_records()
+        self.load_depo_records()
+        self.load_maintenance_records()
+        self.load_inspection_records()
+        self.load_reports()
+        self.update_vehicle_combos()
         
-        try:
-            self.cursor.execute("SELECT plaka, model, mevcut_km, model_yili, arac_surucusu FROM araclar ORDER BY plaka")
-            for row in self.cursor.fetchall():
-                self.arac_tree.insert("", tk.END, values=row)
+        self.fuel_price_entry.delete(0, tk.END)
+        self.fuel_price_entry.insert(0, f"{self.current_fuel_price:.2f}")
+
+    def update_vehicle_combos(self):
+        self.cursor.execute("SELECT plate FROM vehicles ORDER BY plate")
+        vehicles = [plate[0] for plate in self.cursor.fetchall()]
+        
+        combos = [
+            'fuel_vehicle_combo', 'maintenance_vehicle_combo', 'inspection_vehicle_combo',
+            'maintenance_vehicle_combo2', 'report_vehicle_combo', 'cost_vehicle_combo'
+        ]
+        
+        for combo_name in combos:
+            if hasattr(self, combo_name):
+                combo = getattr(self, combo_name)
+                combo['values'] = vehicles
+                if vehicles:
+                    combo.current(0)
+        
+        if hasattr(self, 'report_vehicle_combo'):
+            self.report_vehicle_combo['values'] = ["Tüm Araçlar"] + vehicles
+            self.report_vehicle_combo.current(0)
             
-            self.yakit_arac_combobox_guncelle()
-        except Exception as e:
-            self.show_error(f"Araç listesi güncellenirken hata: {str(e)}")
+        if hasattr(self, 'cost_vehicle_combo'):
+            self.cost_vehicle_combo['values'] = ["Tüm Araçlar"] + vehicles
+            self.cost_vehicle_combo.current(0)
 
-    def yakit_arac_combobox_guncelle(self):
-        """Yakıt aracı combobox'ını günceller"""
-        try:
-            self.cursor.execute("SELECT arac_id, plaka FROM araclar ORDER BY plaka")
-            araclar = [f"{plaka} (ID:{arac_id})" for arac_id, plaka in self.cursor.fetchall()]
-            self.yakit_arac_combobox['values'] = araclar
-            if araclar:
-                self.yakit_arac_combobox.current(0)
-        except Exception as e:
-            self.show_error(f"Araç combobox güncellenirken hata: {str(e)}")
+    def load_vehicles(self):
+        self.vehicle_tree.delete(*self.vehicle_tree.get_children())
+        self.cursor.execute("SELECT plate, model, km, driver FROM vehicles ORDER BY plate")
+        for i, row in enumerate(self.cursor.fetchall()):
+            tag = 'evenrow' if i % 2 == 0 else 'oddrow'
+            self.vehicle_tree.insert("", tk.END, values=row, tags=(tag,))
 
-    def rapor_arac_combobox_guncelle(self):
-        """Rapor aracı combobox'ını günceller"""
-        try:
-            self.cursor.execute("SELECT arac_id, plaka FROM araclar ORDER BY plaka")
-            araclar = ["Tüm Araçlar"] + [f"{plaka} (ID:{arac_id})" for arac_id, plaka in self.cursor.fetchall()]
-            self.rapor_arac_combobox['values'] = araclar
-            if araclar:
-                self.rapor_arac_combobox.current(0)
-        except Exception as e:
-            self.show_error(f"Rapor aracı combobox güncellenirken hata: {str(e)}")
+    def load_fuel_records(self):
+        self.fuel_tree.delete(*self.fuel_tree.get_children())
+        self.cursor.execute("""
+        SELECT f.id, f.date, v.plate, f.km, f.amount, f.price, f.total 
+        FROM fuel_records f
+        JOIN vehicles v ON f.vehicle_id = v.id
+        ORDER BY f.date DESC
+        LIMIT 100
+        """)
+        for i, row in enumerate(self.cursor.fetchall()):
+            tag = 'evenrow' if i % 2 == 0 else 'oddrow'
+            self.fuel_tree.insert("", tk.END, values=row, tags=(tag,))
 
-    def arac_detay_combobox_guncelle(self):
-        """Araç detay combobox'ını günceller"""
+    def load_depo_records(self):
+        """Depo hareketlerini yükler"""
         try:
-            self.cursor.execute("SELECT arac_id, plaka FROM araclar ORDER BY plaka")
-            araclar = [f"{plaka} (ID:{arac_id})" for arac_id, plaka in self.cursor.fetchall()]
-            self.arac_detay_combobox['values'] = araclar
-            if araclar:
-                self.arac_detay_combobox.current(0)
-        except Exception as e:
-            self.show_error(f"Araç detay combobox güncellenirken hata: {str(e)}")
-
-    def bakim_arac_combobox_guncelle(self):
-        """Bakım aracı combobox'ını günceller"""
-        try:
-            self.cursor.execute("SELECT arac_id, plaka FROM araclar ORDER BY plaka")
-            araclar = [f"{plaka} (ID:{arac_id})" for arac_id, plaka in self.cursor.fetchall()]
-            self.bakim_arac_combobox['values'] = araclar
-            if araclar:
-                self.bakim_arac_combobox.current(0)
-        except Exception as e:
-            self.show_error(f"Bakım aracı combobox güncellenirken hata: {str(e)}")
-
-    def rapor_ay_combobox_guncelle(self):
-        """Rapor ay combobox'ını günceller"""
-        try:
-            self.cursor.execute("SELECT DISTINCT strftime('%m-%Y', tarih) FROM yakit_kayitlari ORDER BY tarih DESC")
-            aylar = ["Tüm Aylar"] + [ay[0] for ay in self.cursor.fetchall()]
-            self.rapor_ay_combobox['values'] = aylar
-            if aylar:
-                self.rapor_ay_combobox.current(0)
-        except Exception as e:
-            self.show_error(f"Ay combobox güncellenirken hata: {str(e)}")
-
-    def yakit_kayitlarini_yukle(self):
-        """Yakıt kayıtlarını yükler"""
-        for row in self.yakit_tree.get_children():
-            self.yakit_tree.delete(row)
-        
-        try:
-            self.cursor.execute('''
-            SELECT y.tarih, a.plaka, y.km, y.yakit_miktari, y.notlar
-            FROM yakit_kayitlari y
-            JOIN araclar a ON y.arac_id = a.arac_id
-            ORDER BY y.tarih DESC
-            LIMIT 500
-            ''')
+            # Önceki kayıtları temizle
+            self.depo_tree.delete(*self.depo_tree.get_children())
             
-            for row in self.cursor.fetchall():
-                self.yakit_tree.insert("", tk.END, values=row)
-        except Exception as e:
-            self.show_error(f"Yakıt kayıtları yüklenirken hata: {str(e)}")
-
-    def depo_kayitlarini_yukle(self):
-        """Depo dolum kayıtlarını yükler"""
-        for row in self.depo_tree.get_children():
-            self.depo_tree.delete(row)
-        
-        try:
+            # Veritabanından kayıtları al
             self.cursor.execute("""
-            SELECT tarih, miktar, notlar 
-            FROM depo_dolumlari 
-            ORDER BY tarih DESC
-            LIMIT 500
+            SELECT 
+                id,
+                date,
+                CASE 
+                    WHEN transaction_type='IN' THEN 'Giriş' 
+                    ELSE 'Çıkış' 
+                END as transaction_type,
+                CASE 
+                    WHEN transaction_type='IN' THEN amount 
+                    ELSE -amount 
+                END as signed_amount,
+                price,
+                total,
+                COALESCE(notes, '')
+            FROM fuel_tank
+            ORDER BY date DESC, id DESC
+            LIMIT 200
             """)
             
-            for row in self.cursor.fetchall():
-                self.depo_tree.insert("", tk.END, values=row)
-        except Exception as e:
-            self.show_error(f"Depo kayıtları yüklenirken hata: {str(e)}")
-
-    def depo_durumunu_guncelle(self):
-        """Depo durumunu günceller"""
-        try:
-            self.cursor.execute("SELECT mevcut_yakit FROM depo WHERE depo_id = 1")
-            result = self.cursor.fetchone()
-            if result:
-                mevcut_yakit = result[0]
-                self.depo_durum_label.config(text=f"Depo Durumu: {mevcut_yakit:.2f} Litre")
-            else:
-                self.depo_durum_label.config(text="Depo Durumu: Bilinmiyor")
-        except Exception as e:
-            self.show_error(f"Depo durumu güncellenirken hata: {str(e)}")
-
-    def bakim_kayitlarini_getir(self):
-        """Seçili aracın bakım kayıtlarını getirir"""
-        arac = self.bakim_arac_combobox.get()
-        if not arac:
-            return
-            
-        try:
-            arac_id = int(arac.split("ID:")[1].rstrip(")"))
-            
-            # Bakım kayıtlarını temizle
-            for row in self.bakim_tree.get_children():
-                self.bakim_tree.delete(row)
-                
-            # Bakım kayıtlarını getir
-            self.cursor.execute('''
-            SELECT tarih, tespit_edilen_ariza, yapilan_islem, toplam_tutar
-            FROM bakim_tamirat
-            WHERE arac_id = ?
-            ORDER BY tarih DESC
-            ''', (arac_id,))
-            
-            for row in self.cursor.fetchall():
-                self.bakim_tree.insert("", tk.END, values=row)
-                
-        except Exception as e:
-            self.show_error(f"Bakım kayıtları getirilirken hata: {str(e)}")
-
-    def bakim_toplam_hesapla(self):
-        """Bakım kaydı için toplam tutarı hesaplar"""
-        try:
-            parca_ucreti = float(self.bakim_parca_ucreti_entry.get() or 0)
-            iscilik_ucreti = float(self.bakim_iscilik_ucreti_entry.get() or 0)
-            toplam = parca_ucreti + iscilik_ucreti
-            self.bakim_toplam_tutar_entry.config(state="normal")
-            self.bakim_toplam_tutar_entry.delete(0, tk.END)
-            self.bakim_toplam_tutar_entry.insert(0, f"{toplam:.2f}")
-            self.bakim_toplam_tutar_entry.config(state="readonly")
-        except ValueError:
-            self.bakim_toplam_tutar_entry.config(state="normal")
-            self.bakim_toplam_tutar_entry.delete(0, tk.END)
-            self.bakim_toplam_tutar_entry.insert(0, "0.00")
-            self.bakim_toplam_tutar_entry.config(state="readonly")
-
-    def bakim_kaydi_ekle(self):
-        """Yeni bakım kaydı ekler"""
-        arac = self.bakim_arac_combobox.get()
-        tarih = self.bakim_tarih_entry.get().strip()
-        saat = self.bakim_saat_entry.get().strip()
-        ariza = self.bakim_ariza_entry.get().strip()
-        islem = self.bakim_islem_entry.get().strip()
-        parca_ucreti = self.bakim_parca_ucreti_entry.get().strip()
-        iscilik_ucreti = self.bakim_iscilik_ucreti_entry.get().strip()
-        toplam_tutar = self.bakim_toplam_tutar_entry.get().strip()
-        notlar = self.bakim_notlar_entry.get().strip()
-        
-        if not arac:
-            self.show_error("Lütfen bir araç seçin!")
-            return
-            
-        try:
-            arac_id = int(arac.split("ID:")[1].rstrip(")"))
-            
-            # Tarih kontrolü
-            try:
-                datetime.strptime(tarih, "%d-%m-%Y")
-            except ValueError:
-                raise ValueError("Tarih formatı yanlış! Örnek: 2023-01-15")
-                
-            # Saat kontrolü
-            try:
-                datetime.strptime(saat, "%H:%M")
-            except ValueError:
-                raise ValueError("Saat formatı yanlış! Örnek: 14:30")
-                
-            # Ücretler
-            parca_ucreti = float(parca_ucreti) if parca_ucreti else 0
-            iscilik_ucreti = float(iscilik_ucreti) if iscilik_ucreti else 0
-            toplam_tutar = float(toplam_tutar) if toplam_tutar else 0
-            
-            # Bakım kaydını ekle
-            self.cursor.execute('''
-            INSERT INTO bakim_tamirat (
-                arac_id, tarih, saat, tespit_edilen_ariza, yapilan_islem,
-                parca_ucreti, iscilik_ucreti, toplam_tutar, notlar
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                arac_id, tarih, saat, ariza, islem,
-                parca_ucreti, iscilik_ucreti, toplam_tutar, notlar
-            ))
-            
-            self.conn.commit()
-            self.show_success("Bakım kaydı başarıyla eklendi!")
-            
-            # Formu temizle
-            self.bakim_tarih_entry.delete(0, tk.END)
-            self.bakim_tarih_entry.insert(0, datetime.now().strftime("%d-%m-%Y"))
-            self.bakim_saat_entry.delete(0, tk.END)
-            self.bakim_saat_entry.insert(0, datetime.now().strftime("%H:%M"))
-            self.bakim_ariza_entry.delete(0, tk.END)
-            self.bakim_islem_entry.delete(0, tk.END)
-            self.bakim_parca_ucreti_entry.delete(0, tk.END)
-            self.bakim_parca_ucreti_entry.insert(0, "0")
-            self.bakim_iscilik_ucreti_entry.delete(0, tk.END)
-            self.bakim_iscilik_ucreti_entry.insert(0, "0")
-            self.bakim_toplam_tutar_entry.config(state="normal")
-            self.bakim_toplam_tutar_entry.delete(0, tk.END)
-            self.bakim_toplam_tutar_entry.insert(0, "0.00")
-            self.bakim_toplam_tutar_entry.config(state="readonly")
-            self.bakim_notlar_entry.delete(0, tk.END)
-            
-            # Bakım kayıtlarını yenile
-            self.bakim_kayitlarini_getir()
-            
-        except ValueError as ve:
-            self.show_error(f"Geçersiz değer: {str(ve)}")
-        except Exception as e:
-            self.show_error(f"Bakım kaydı eklenirken hata: {str(e)}")
-            self.conn.rollback()
-
-    def bakim_kaydi_sil(self):
-        """Seçili bakım kaydını siler"""
-        selected = self.bakim_tree.selection()
-        if not selected:
-            self.show_error("Lütfen silmek için bir kayıt seçin!")
-            return
-            
-        kayit = self.bakim_tree.item(selected[0])['values']
-        tarih, ariza, islem, tutar = kayit
-        
-        if not messagebox.askyesno(
-            "Onay", 
-            f"{tarih} tarihli bakım kaydını silmek istediğinize emin misiniz?\nArıza: {ariza}\nİşlem: {islem}\nTutar: {tutar}"
-        ):
-            return
-            
-        try:
-            arac = self.bakim_arac_combobox.get()
-            arac_id = int(arac.split("ID:")[1].rstrip(")"))
-            
-            self.cursor.execute('''
-            DELETE FROM bakim_tamirat 
-            WHERE arac_id = ? AND tarih = ? AND tespit_edilen_ariza = ?
-            ''', (arac_id, tarih, ariza))
-            
-            self.conn.commit()
-            self.show_success("Bakım kaydı başarıyla silindi!")
-            
-            self.bakim_kayitlarini_getir()
-            
-        except Exception as e:
-            self.show_error(f"Bakım kaydı silinirken hata: {str(e)}")
-            self.conn.rollback()
-
-    def bakim_kaydi_duzenle(self):
-        """Seçili bakım kaydını düzenler"""
-        selected = self.bakim_tree.selection()
-        if not selected:
-            self.show_error("Lütfen düzenlemek için bir kayıt seçin!")
-            return
-            
-        kayit = self.bakim_tree.item(selected[0])['values']
-        tarih, ariza, islem, tutar = kayit
-        
-        try:
-            arac = self.bakim_arac_combobox.get()
-            arac_id = int(arac.split("ID:")[1].rstrip(")"))
-            
-            # Kaydın detaylarını getir
-            self.cursor.execute('''
-            SELECT tarih, saat, tespit_edilen_ariza, yapilan_islem, 
-                   parca_ucreti, iscilik_ucreti, toplam_tutar, notlar
-            FROM bakim_tamirat
-            WHERE arac_id = ? AND tarih = ? AND tespit_edilen_ariza = ?
-            ''', (arac_id, tarih, ariza))
-            
-            kayit_detay = self.cursor.fetchone()
-            if not kayit_detay:
-                self.show_error("Kayıt bulunamadı!")
-                return
-                
-            # Formu doldur
-            self.bakim_tarih_entry.delete(0, tk.END)
-            self.bakim_tarih_entry.insert(0, kayit_detay[0])
-            
-            self.bakim_saat_entry.delete(0, tk.END)
-            self.bakim_saat_entry.insert(0, kayit_detay[1])
-            
-            self.bakim_ariza_entry.delete(0, tk.END)
-            self.bakim_ariza_entry.insert(0, kayit_detay[2])
-            
-            self.bakim_islem_entry.delete(0, tk.END)
-            self.bakim_islem_entry.insert(0, kayit_detay[3])
-            
-            self.bakim_parca_ucreti_entry.delete(0, tk.END)
-            self.bakim_parca_ucreti_entry.insert(0, str(kayit_detay[4]))
-            
-            self.bakim_iscilik_ucreti_entry.delete(0, tk.END)
-            self.bakim_iscilik_ucreti_entry.insert(0, str(kayit_detay[5]))
-            
-            self.bakim_toplam_tutar_entry.config(state="normal")
-            self.bakim_toplam_tutar_entry.delete(0, tk.END)
-            self.bakim_toplam_tutar_entry.insert(0, str(kayit_detay[6]))
-            self.bakim_toplam_tutar_entry.config(state="readonly")
-            
-            self.bakim_notlar_entry.delete(0, tk.END)
-            self.bakim_notlar_entry.insert(0, kayit_detay[7] if kayit_detay[7] else "")
-            
-            # Önce kaydı sil
-            self.cursor.execute('''
-            DELETE FROM bakim_tamirat 
-            WHERE arac_id = ? AND tarih = ? AND tespit_edilen_ariza = ?
-            ''', (arac_id, tarih, ariza))
-            
-            self.conn.commit()
-            
-            # Bakım kayıtlarını yenile
-            self.bakim_kayitlarini_getir()
-            
-        except Exception as e:
-            self.show_error(f"Bakım kaydı düzenlenirken hata: {str(e)}")
-            self.conn.rollback()
-
-    def arac_ekle(self):
-        """Yeni araç ekler"""
-        plaka = self.plaka_entry.get().strip().upper()
-        model = self.model_entry.get().strip()
-        km = self.km_entry.get().strip()
-        model_yili = self.model_yili_entry.get().strip()
-        muayene_tarihi = self.muayene_tarihi_entry.get().strip()
-        bakim_tarihi = self.bakim_tarihi_entry.get().strip()
-        arac_surucusu = self.arac_surucusu_entry.get().strip()
-        
-        if not plaka or not model or not km:
-            self.show_error("Lütfen zorunlu alanları doldurun (Plaka, Model, KM)!")
-            return
-        
-        try:
-            km = int(km)
-            if km < 0:
-                raise ValueError("KM negatif olamaz")
-            
-            model_yili = int(model_yili) if model_yili else None
-                
-            self.cursor.execute(
-                """INSERT INTO araclar 
-                (plaka, model, mevcut_km, model_yili, muayene_tarihi, bakim_tarihi, arac_surucusu) 
-                VALUES (?, ?, ?, ?, ?, ?, ?)""", 
-                (plaka, model, km, model_yili, muayene_tarihi, bakim_tarihi, arac_surucusu)
-            )
-            self.conn.commit()
-            
-            self.show_success(f"{plaka} plakalı araç başarıyla eklendi!")
-            self.plaka_entry.delete(0, tk.END)
-            self.model_entry.delete(0, tk.END)
-            self.km_entry.delete(0, tk.END)
-            self.model_yili_entry.delete(0, tk.END)
-            self.muayene_tarihi_entry.delete(0, tk.END)
-            self.bakim_tarihi_entry.delete(0, tk.END)
-            self.arac_surucusu_entry.delete(0, tk.END)
-            
-            self.arac_listesini_guncelle()
-            self.rapor_arac_combobox_guncelle()
-            self.arac_detay_combobox_guncelle()
-            self.bakim_arac_combobox_guncelle()
-            
-        except ValueError as ve:
-            self.show_error(f"Geçersiz KM değeri: {str(ve)}")
-        except sqlite3.IntegrityError:
-            self.show_error("Bu plaka zaten kayıtlı!")
-        except Exception as e:
-            self.show_error(f"Araç eklenirken hata: {str(e)}")
-            self.conn.rollback()
-
-    def arac_sil(self):
-        """Seçili aracı siler"""
-        selected = self.arac_tree.selection()
-        if not selected:
-            self.show_error("Lütfen silmek için bir araç seçin!")
-            return
-        
-        plaka = self.arac_tree.item(selected[0])['values'][0]
-        
-        if not messagebox.askyesno(
-            "Onay", 
-            f"{plaka} plakalı aracı ve tüm yakıt kayıtlarını silmek istediğinize emin misiniz?\nBu işlem geri alınamaz!"
-        ):
-            return
-        
-        try:
-            # Önce aracın ID'sini al
-            self.cursor.execute("SELECT arac_id FROM araclar WHERE plaka = ?", (plaka,))
-            result = self.cursor.fetchone()
-            
-            if not result:
-                self.show_error("Araç bulunamadı!")
-                return
-                
-            arac_id = result[0]
-            
-            # Yakıt kayıtlarını sil
-            self.cursor.execute("DELETE FROM yakit_kayitlari WHERE arac_id = ?", (arac_id,))
-            
-            # Bakım kayıtlarını sil
-            self.cursor.execute("DELETE FROM bakim_tamirat WHERE arac_id = ?", (arac_id,))
-            
-            # Aracı sil
-            self.cursor.execute("DELETE FROM araclar WHERE arac_id = ?", (arac_id,))
-            
-            self.conn.commit()
-            self.show_success(f"{plaka} plakalı araç ve tüm kayıtları silindi!")
-            
-            self.arac_listesini_guncelle()
-            self.yakit_kayitlarini_yukle()
-            self.rapor_arac_combobox_guncelle()
-            self.arac_detay_combobox_guncelle()
-            self.bakim_arac_combobox_guncelle()
-            
-        except Exception as e:
-            self.show_error(f"Araç silinirken hata: {str(e)}")
-            self.conn.rollback()
-
-    def arac_detay_goster(self):
-        """Araç detaylarını gösterir"""
-        selected = self.arac_tree.selection()
-        if not selected:
-            self.show_error("Lütfen detaylarını görmek için bir araç seçin!")
-            return
-        
-        plaka = self.arac_tree.item(selected[0])['values'][0]
-        
-        # Araç detay sekmesine geç
-        self.notebook.select(self.arac_detay_frame)
-        
-        # Combobox'ta seçili aracı bul
-        for i, item in enumerate(self.arac_detay_combobox['values']):
-            if plaka in item:
-                self.arac_detay_combobox.current(i)
-                self.arac_detay_getir()
-                break
-
-    def arac_detay_getir(self):
-        """Seçili aracın detaylarını getirir"""
-        arac = self.arac_detay_combobox.get()
-        if not arac:
-            return
-            
-        try:
-            arac_id = int(arac.split("ID:")[1].rstrip(")"))
-            
-            # Araç bilgilerini al
-            self.cursor.execute("""
-            SELECT plaka, model, mevcut_km, model_yili, muayene_tarihi, bakim_tarihi, arac_surucusu 
-            FROM araclar 
-            WHERE arac_id = ?
-            """, (arac_id,))
-            
-            result = self.cursor.fetchone()
-            if not result:
-                self.show_error("Araç bulunamadı!")
-                return
-                
-            plaka, model, km, model_yili, muayene_tarihi, bakim_tarihi, arac_surucusu = result
-            
-            # Bilgileri göster
-            self.arac_detay_labels['plaka'].config(text=plaka)
-            self.arac_detay_labels['model'].config(text=model)
-            self.arac_detay_labels['mevcut_km'].config(text=f"{km:,} km")
-            self.arac_detay_labels['model_yili'].config(text=model_yili if model_yili else "-")
-            self.arac_detay_labels['muayene_tarihi'].config(text=muayene_tarihi if muayene_tarihi else "-")
-            self.arac_detay_labels['bakim_tarihi'].config(text=bakim_tarihi if bakim_tarihi else "-")
-            self.arac_detay_labels['arac_surucusu'].config(text=arac_surucusu if arac_surucusu else "-")
-            
-            # Güncelleme formunu doldur
-            self.update_entries['model_yili'].delete(0, tk.END)
-            self.update_entries['model_yili'].insert(0, str(model_yili) if model_yili else "")
-            
-            self.update_entries['muayene_tarihi'].delete(0, tk.END)
-            self.update_entries['muayene_tarihi'].insert(0, muayene_tarihi) if muayene_tarihi else ""
-            
-            self.update_entries['bakim_tarihi'].delete(0, tk.END)
-            self.update_entries['bakim_tarihi'].insert(0, bakim_tarihi) if bakim_tarihi else ""
-            
-            self.update_entries['arac_surucusu'].delete(0, tk.END)
-            self.update_entries['arac_surucusu'].insert(0, arac_surucusu) if arac_surucusu else ""
-            
-            # Uyarıları kontrol et
-            uyarilar = []
-            today = datetime.now().date()
-            
-            if muayene_tarihi:
-                try:
-                    muayene_tarihi_dt = datetime.strptime(muayene_tarihi, "%d-%m-%Y").date()
-                    if muayene_tarihi_dt < today:
-                        uyarilar.append(f"Muayene tarihi geçmiş: {muayene_tarihi}")
-                    elif (muayene_tarihi_dt - today).days <= 30:
-                        uyarilar.append(f"Muayene tarihi yaklaşıyor: {muayene_tarihi} (Kalan gün: {(muayene_tarihi_dt - today).days})")
-                except ValueError:
-                    pass
-                    
-            if bakim_tarihi:
-                try:
-                    bakim_tarihi_dt = datetime.strptime(bakim_tarihi, "%d-%m-%Y").date()
-                    if bakim_tarihi_dt < today:
-                        uyarilar.append(f"Bakım tarihi geçmiş: {bakim_tarihi}")
-                    elif (bakim_tarihi_dt - today).days <= 30:
-                        uyarilar.append(f"Bakım tarihi yaklaşıyor: {bakim_tarihi} (Kalan gün: {(bakim_tarihi_dt - today).days})")
-                except ValueError:
-                    pass
-            
-            if uyarilar:
-                self.uyari_label.config(text="\n".join(uyarilar), foreground="red")
-            else:
-                self.uyari_label.config(text="Herhangi bir uyarı yok.", foreground="green")
-            
-            # Yakıt kayıtlarını getir
-            for row in self.arac_yakit_tree.get_children():
-                self.arac_yakit_tree.delete(row)
-                
-            self.cursor.execute('''
-            SELECT tarih, km, yakit_miktari, notlar
-            FROM yakit_kayitlari
-            WHERE arac_id = ?
-            ORDER BY tarih DESC
-            LIMIT 50
-            ''', (arac_id,))
-            
-            for row in self.cursor.fetchall():
-                self.arac_yakit_tree.insert("", tk.END, values=row)
-                
-        except Exception as e:
-            self.show_error(f"Araç detayları getirilirken hata: {str(e)}")
-
-    def arac_detay_guncelle(self):
-        """Araç detaylarını günceller"""
-        arac = self.arac_detay_combobox.get()
-        if not arac:
-            self.show_error("Lütfen bir araç seçin!")
-            return
-            
-        try:
-            arac_id = int(arac.split("ID:")[1].rstrip(")"))
-            
-            model_yili = self.update_entries['model_yili'].get().strip()
-            muayene_tarihi = self.update_entries['muayene_tarihi'].get().strip()
-            bakim_tarihi = self.update_entries['bakim_tarihi'].get().strip()
-            arac_surucusu = self.update_entries['arac_surucusu'].get().strip()
-            
-            # Tarih formatlarını kontrol et
-            if muayene_tarihi:
-                try:
-                    datetime.strptime(muayene_tarihi, "%d-%m-%Y")
-                except ValueError:
-                    raise ValueError("Muayene tarihi formatı yanlış! Örnek: 15-01-2025")
-                    
-            if bakim_tarihi:
-                try:
-                    datetime.strptime(bakim_tarihi, "%d-%m-%Y")
-                except ValueError:
-                    raise ValueError("Bakım tarihi formatı yanlış! Örnek: 15-01-2025")
-            
-            # Model yılını kontrol et
-            model_yili = int(model_yili) if model_yili else None
-            
-            # Veritabanını güncelle
-            self.cursor.execute('''
-            UPDATE araclar 
-            SET model_yili = ?, muayene_tarihi = ?, bakim_tarihi = ?, arac_surucusu = ?
-            WHERE arac_id = ?
-            ''', (model_yili, muayene_tarihi, bakim_tarihi, arac_surucusu, arac_id))
-            
-            self.conn.commit()
-            self.show_success("Araç bilgileri başarıyla güncellendi!")
-            
-            # Bilgileri yenile
-            self.arac_detay_getir()
-            self.arac_listesini_guncelle()
-            
-        except ValueError as ve:
-            self.show_error(f"Geçersiz değer: {str(ve)}")
-        except Exception as e:
-            self.show_error(f"Güncelleme sırasında hata: {str(e)}")
-            self.conn.rollback()
-
-    def yakit_ekle(self):
-        """Yeni yakıt kaydı ekler"""
-        arac = self.yakit_arac_combobox.get()
-        km = self.yakit_km_entry.get().strip()
-        miktar = self.yakit_miktar_entry.get().strip()
-        tarih = self.yakit_tarih_entry.get().strip()
-        notlar = self.yakit_not_entry.get().strip()
-        
-        if not arac or not km or not miktar or not tarih:
-            self.show_error("Lütfen zorunlu alanları doldurun!")
-            return
-        
-        try:
-            # Araç ID'sini al
-            arac_id = int(arac.split("ID:")[1].rstrip(")"))
-            
-            # KM ve miktarı kontrol et
-            km = int(km)
-            miktar = float(miktar)
-            
-            if km < 0 or miktar <= 0:
-                raise ValueError("KM ve miktar pozitif olmalıdır")
-            
-            # Tarih formatını kontrol et
-            try:
-                datetime.strptime(tarih, "%d-%m-%Y %H:%M")
-            except ValueError:
-                raise ValueError("Tarih formatı yanlış! Örnek: 2023-01-15 14:30")
-            
-            # Yakıt ekle
-            self.cursor.execute(
-                "INSERT INTO yakit_kayitlari (arac_id, km, yakit_miktari, notlar, tarih) VALUES (?, ?, ?, ?, ?)",
-                (arac_id, km, miktar, notlar, tarih)
-            )
-            
-            # Aracın mevcut km'sini güncelle
-            self.cursor.execute(
-                "UPDATE araclar SET mevcut_km = ? WHERE arac_id = ?",
-                (km, arac_id)
-            )
-            
-            # Depodan yakıt düş (varsayılan depo ID=1)
-            self.cursor.execute(
-                "UPDATE depo SET mevcut_yakit = mevcut_yakit - ?, son_guncelleme = datetime('now') WHERE depo_id = 1",
-                (miktar,)
-            )
-            
-            self.conn.commit()
-            self.show_success("Yakıt kaydı başarıyla eklendi!")
-            
-            # Alanları temizle
-            self.yakit_km_entry.delete(0, tk.END)
-            self.yakit_miktar_entry.delete(0, tk.END)
-            self.yakit_not_entry.delete(0, tk.END)
-            self.yakit_tarih_entry.delete(0, tk.END)
-            self.yakit_tarih_entry.insert(0, datetime.now().strftime("%d-%m-%Y %H:%M"))
-            
-            # Listeleri güncelle
-            self.yakit_kayitlarini_yukle()
-            self.arac_listesini_guncelle()
-            self.depo_durumunu_guncelle()
-            
-            # Araç detay sekmesindeki bilgileri güncelle
-            if hasattr(self, 'arac_detay_combobox'):
-                current_arac = self.arac_detay_combobox.get()
-                if current_arac and str(arac_id) in current_arac:
-                    self.arac_detay_getir()
-            
-        except ValueError as ve:
-            self.show_error(f"Geçersiz değer: {str(ve)}")
-        except Exception as e:
-            self.show_error(f"Yakıt eklenirken hata: {str(e)}")
-            self.conn.rollback()
-
-    def yakit_kaydi_sil(self):
-        """Seçili yakıt kaydını siler"""
-        selected = self.yakit_tree.selection()
-        if not selected:
-            self.show_error("Lütfen silmek için bir kayıt seçin!")
-            return
-        
-        kayit = self.yakit_tree.item(selected[0])['values']
-        tarih, plaka, km, miktar, notlar = kayit
-        
-        if not messagebox.askyesno(
-            "Onay", 
-            f"{tarih} tarihli {plaka} aracına ait {miktar}L yakıt kaydını silmek istediğinize emin misiniz?\nBu işlem geri alınamaz!"
-        ):
-            return
-        
-        try:
-            # Önce aracın ID'sini al
-            self.cursor.execute("SELECT arac_id FROM araclar WHERE plaka = ?", (plaka,))
-            result = self.cursor.fetchone()
-            
-            if not result:
-                self.show_error("Araç bulunamadı!")
-                return
-                
-            arac_id = result[0]
-            
-            # Yakıt kaydını sil
-            self.cursor.execute(
-                "DELETE FROM yakit_kayitlari WHERE arac_id = ? AND tarih = ? AND km = ?",
-                (arac_id, tarih, km)
-            )
-            
-            # Depoya yakıt ekle (silinen kayıt geri eklendi)
-            self.cursor.execute(
-                "UPDATE depo SET mevcut_yakit = mevcut_yakit + ?, son_guncelleme = datetime('now') WHERE depo_id = 1",
-                (float(miktar),)
-            )
-            
-            self.conn.commit()
-            self.show_success("Yakıt kaydı başarıyla silindi!")
-            
-            self.yakit_kayitlarini_yukle()
-            self.depo_durumunu_guncelle()
-            
-            # Araç detay sekmesindeki bilgileri güncelle
-            if hasattr(self, 'arac_detay_combobox'):
-                current_arac = self.arac_detay_combobox.get()
-                if current_arac and str(arac_id) in current_arac:
-                    self.arac_detay_getir()
-            
-        except Exception as e:
-            self.show_error(f"Yakıt kaydı silinirken hata: {str(e)}")
-            self.conn.rollback()
-
-    def depo_doldur(self):
-        """Depo dolum kaydı ekler"""
-        miktar = self.depo_miktar_entry.get().strip()
-        tarih = self.depo_tarih_entry.get().strip()
-        notlar = self.depo_not_entry.get().strip()
-        
-        if not miktar or not tarih:
-            self.show_error("Lütfen zorunlu alanları doldurun!")
-            return
-        
-        try:
-            miktar = float(miktar)
-            
-            if miktar <= 0:
-                raise ValueError("Miktar pozitif olmalıdır")
-            
-            # Tarih formatını kontrol et
-            try:
-                datetime.strptime(tarih, "%d-%m-%Y %H:%M")
-            except ValueError:
-                raise ValueError("Tarih formatı yanlış! Örnek: 2023-01-15 14:30")
-            
-            # Depo dolum kaydı ekle
-            self.cursor.execute(
-                "INSERT INTO depo_dolumlari (miktar, notlar, tarih) VALUES (?, ?, ?)",
-                (miktar, notlar, tarih)
-            )
+            # Kayıtları ekle
+            for i, row in enumerate(self.cursor.fetchall()):
+                tag = 'evenrow' if i % 2 == 0 else 'oddrow'
+                formatted_row = (
+                    row[0],  # ID
+                    row[1],  # Tarih
+                    row[2],  # İşlem türü
+                    f"{abs(row[3]):.2f}",  # Miktar (mutlak değer)
+                    f"{row[4]:.2f}",  # Fiyat
+                    f"{row[5]:.2f}",  # Toplam
+                    row[6]   # Not
+                )
+                self.depo_tree.insert("", tk.END, values=formatted_row, tags=(tag,))
             
             # Depo durumunu güncelle
-            self.cursor.execute(
-                "UPDATE depo SET mevcut_yakit = mevcut_yakit + ?, son_guncelleme = datetime('now') WHERE depo_id = 1",
-                (miktar,)
-            )
+            self.update_fuel_level()
             
-            self.conn.commit()
-            self.show_success(f"Depo başarıyla {miktar}L dolduruldu!")
-            
-            # Alanları temizle
-            self.depo_miktar_entry.delete(0, tk.END)
-            self.depo_not_entry.delete(0, tk.END)
-            self.depo_tarih_entry.delete(0, tk.END)
-            self.depo_tarih_entry.insert(0, datetime.now().strftime("%d-%m-%Y %H:%M"))
-            
-            # Listeleri güncelle
-            self.depo_kayitlarini_yukle()
-            self.depo_durumunu_guncelle()
-            
-        except ValueError as ve:
-            self.show_error(f"Geçersiz değer: {str(ve)}")
         except Exception as e:
-            self.show_error(f"Depo doldurulurken hata: {str(e)}")
-            self.conn.rollback()
+            messagebox.showerror("Hata", f"Kayıtlar yüklenirken hata: {str(e)}")
 
-    def depo_dolum_sil(self):
-        """Seçili depo dolum kaydını siler"""
+    def load_maintenance_records(self):
+        self.maintenance_tree.delete(*self.maintenance_tree.get_children())
+        self.cursor.execute("""
+        SELECT m.id, m.date, v.plate, m.km, m.fault, m.repair, 
+               m.labor_cost, m.material_cost, (m.labor_cost + m.material_cost)
+        FROM maintenance m
+        JOIN vehicles v ON m.vehicle_id = v.id
+        ORDER BY m.date DESC
+        LIMIT 100
+        """)
+        for i, row in enumerate(self.cursor.fetchall()):
+            tag = 'evenrow' if i % 2 == 0 else 'oddrow'
+            self.maintenance_tree.insert("", tk.END, values=row, tags=(tag,))
+
+    def load_inspection_records(self):
+        self.inspection_tree.delete(*self.inspection_tree.get_children())
+        self.cursor.execute("""
+        SELECT i.id, i.date, v.plate, i.km, 
+               COALESCE(i.next_inspection_date, ''), 
+               COALESCE(i.next_maintenance_date, ''), 
+               COALESCE(i.next_maintenance_km, '')
+        FROM inspections i
+        JOIN vehicles v ON i.vehicle_id = v.id
+        ORDER BY i.date DESC
+        LIMIT 100
+        """)
+        for i, row in enumerate(self.cursor.fetchall()):
+            tag = 'evenrow' if i % 2 == 0 else 'oddrow'
+            self.inspection_tree.insert("", tk.END, values=row, tags=(tag,))
+
+    def load_reports(self):
+        self.report_tree.delete(*self.report_tree.get_children())
+
+    def load_vehicle_data(self, event):
+        selected = self.vehicle_tree.selection()
+        if not selected:
+            return
+            
+        vehicle = self.vehicle_tree.item(selected[0])['values']
+        self.plaka_entry.delete(0, tk.END)
+        self.plaka_entry.insert(0, vehicle[0])
+        self.model_entry.delete(0, tk.END)
+        self.model_entry.insert(0, vehicle[1])
+        self.km_entry.delete(0, tk.END)
+        self.km_entry.insert(0, vehicle[2])
+        self.driver_entry.delete(0, tk.END)
+        if len(vehicle) > 3:
+            self.driver_entry.insert(0, vehicle[3])
+
+    def load_fuel_data(self, event):
+        selected = self.fuel_tree.selection()
+        if not selected:
+            return
+            
+        fuel = self.fuel_tree.item(selected[0])['values']
+        self.fuel_vehicle_combo.set(fuel[2])
+        self.fuel_km_entry.delete(0, tk.END)
+        self.fuel_km_entry.insert(0, fuel[3])
+        self.fuel_amount_entry.delete(0, tk.END)
+        self.fuel_amount_entry.insert(0, fuel[4])
+        self.fuel_price_entry.delete(0, tk.END)
+        self.fuel_price_entry.insert(0, fuel[5])
+        self.fuel_date_entry.set_date(datetime.strptime(fuel[1], "%d.%m.%Y"))
+
+    def load_depo_data(self, event):
+        """Seçili depo kaydını forma yükler - Yeni sütun yapısına uygun"""
         selected = self.depo_tree.selection()
         if not selected:
-            self.show_error("Lütfen silmek için bir kayıt seçin!")
+            return
+
+        try:
+            record = self.depo_tree.item(selected[0])['values']
+
+            # Yeni sütun yapısı: (ID, Tarih, Miktar, Birim Fiyat, Toplam, Not)
+            self.depo_amount_entry.delete(0, tk.END)
+            self.depo_amount_entry.insert(0, record[2])  # Miktar
+
+            self.depo_price_entry.delete(0, tk.END)
+            self.depo_price_entry.insert(0, record[3])  # Birim Fiyat
+
+            self.depo_date_entry.set_date(datetime.strptime(record[1], "%d.%m.%Y"))  # Tarih
+
+            self.depo_notes_entry.delete(0, tk.END)
+            if len(record) > 5:  # Not alanı varsa
+                self.depo_notes_entry.insert(0, record[5])
+
+        except Exception as e:
+            messagebox.showerror("Hata", f"Kayıt yüklenirken hata: {str(e)}")
+            self.clear_depo_form()
+
+
+    def load_maintenance_data(self, event):
+        selected = self.maintenance_tree.selection()
+        if not selected:
+            return
+            
+        maintenance = self.maintenance_tree.item(selected[0])['values']
+        self.maintenance_vehicle_combo.set(maintenance[2])
+        self.maintenance_km_entry.delete(0, tk.END)
+        self.maintenance_km_entry.insert(0, maintenance[3])
+        self.maintenance_fault_entry.delete(0, tk.END)
+        self.maintenance_fault_entry.insert(0, maintenance[4])
+        self.maintenance_repair_entry.delete(0, tk.END)
+        self.maintenance_repair_entry.insert(0, maintenance[5])
+        self.maintenance_labor_cost_entry.delete(0, tk.END)
+        self.maintenance_labor_cost_entry.insert(0, maintenance[6])
+        self.maintenance_material_cost_entry.delete(0, tk.END)
+        self.maintenance_material_cost_entry.insert(0, maintenance[7])
+        self.maintenance_date_entry.set_date(datetime.strptime(maintenance[1], "%d.%m.%Y"))
+
+    def load_inspection_data(self, event):
+        selected = self.inspection_tree.selection()
+        if not selected:
+            return
+            
+        inspection = self.inspection_tree.item(selected[0])['values']
+        self.inspection_vehicle_combo.set(inspection[2])
+        self.inspection_km_entry.delete(0, tk.END)
+        self.inspection_km_entry.insert(0, inspection[3])
+        self.inspection_date_entry.set_date(datetime.strptime(inspection[1], "%d.%m.%Y"))
+        
+        # Handle possible None values for dates
+        if inspection[4]:  # next_inspection_date
+            try:
+                self.next_inspection_date_entry.set_date(datetime.strptime(inspection[4], "%d.%m.%Y"))
+            except ValueError:
+                pass
+        
+        if inspection[5]:  # next_maintenance_date
+            try:
+                self.next_maintenance_date_entry.set_date(datetime.strptime(inspection[5], "%d.%m.%Y"))
+            except ValueError:
+                pass
+        
+        if inspection[6]:  # next_maintenance_km
+            self.next_maintenance_km_entry.delete(0, tk.END)
+            self.next_maintenance_km_entry.insert(0, inspection[6])
+
+    def clear_vehicle_form(self):
+        self.plaka_entry.delete(0, tk.END)
+        self.model_entry.delete(0, tk.END)
+        self.km_entry.delete(0, tk.END)
+        self.driver_entry.delete(0, tk.END)
+        self.vehicle_tree.selection_remove(self.vehicle_tree.selection())
+
+    def clear_maintenance_form(self):
+        self.maintenance_km_entry.delete(0, tk.END)
+        self.maintenance_fault_entry.delete(0, tk.END)
+        self.maintenance_repair_entry.delete(0, tk.END)
+        self.maintenance_labor_cost_entry.delete(0, tk.END)
+        self.maintenance_material_cost_entry.delete(0, tk.END)
+        self.maintenance_tree.selection_remove(self.maintenance_tree.selection())
+
+    def clear_inspection_form(self):
+        self.inspection_km_entry.delete(0, tk.END)
+        self.inspection_tree.selection_remove(self.inspection_tree.selection())
+        next_year = datetime.now() + timedelta(days=365)
+        self.next_inspection_date_entry.set_date(next_year)
+
+    def clear_periodic_maintenance_form(self):
+        self.maintenance_km_entry2.delete(0, tk.END)
+        self.next_maintenance_km_entry.delete(0, tk.END)
+        next_year = datetime.now() + timedelta(days=365)
+        self.next_maintenance_date_entry.set_date(next_year)
+
+    def clear_depo_form(self):
+        """Depo formunu temizler"""
+        self.depo_amount_entry.delete(0, tk.END)
+        self.depo_price_entry.delete(0, tk.END)
+        self.depo_price_entry.insert(0, f"{self.current_fuel_price:.2f}")
+        self.depo_notes_entry.delete(0, tk.END)
+        self.transaction_type.set("IN")
+        self.depo_tree.selection_remove(self.depo_tree.selection())
+
+    def save_vehicle(self):
+        plate = self.plaka_entry.get().strip().upper()
+        model = self.model_entry.get().strip()
+        km = self.km_entry.get().strip()
+        driver = self.driver_entry.get().strip()
+        
+        if not plate or not model or not km:
+            messagebox.showerror("Hata", "Lütfen zorunlu alanları doldurun (Plaka, Model, KM)!")
             return
         
-        kayit = self.depo_tree.item(selected[0])['values']
-        tarih, miktar, notlar = kayit
+        try:
+            km = int(km)
+    
+            selected = self.vehicle_tree.selection()
+            if selected:  # Update
+                old_plate = self.vehicle_tree.item(selected[0])['values'][0]
+                self.cursor.execute(
+                    "UPDATE vehicles SET plate=?, model=?, km=?, driver=? WHERE plate=?",
+                    (plate, model, km, driver, old_plate)
+                )
+                messagebox.showinfo("Başarılı", "Araç bilgileri güncellendi!")
+            else:  # Insert
+                self.cursor.execute(
+                    "INSERT INTO vehicles (plate, model, km, driver) VALUES (?, ?, ?, ?)",
+                    (plate, model, km, driver)
+                )
+                messagebox.showinfo("Başarılı", "Yeni araç eklendi!")
+            
+            self.conn.commit()
+            self.load_vehicles()
+            self.update_vehicle_combos()
+            self.clear_vehicle_form()
+            
+        except ValueError:
+            messagebox.showerror("Hata", "Geçersiz KM değeri!")
+        except sqlite3.IntegrityError:
+            messagebox.showerror("Hata", "Bu plaka zaten kayıtlı!")
+        except Exception as e:
+            messagebox.showerror("Hata", f"Kayıt sırasında hata: {str(e)}")
+            self.conn.rollback()
+
+    def save_fuel_record(self):
+        vehicle = self.fuel_vehicle_combo.get()
+        km = self.fuel_km_entry.get().strip()
+        amount = self.fuel_amount_entry.get().strip()
+        price = self.fuel_price_entry.get().strip() or str(self.current_fuel_price)
+        date = self.fuel_date_entry.get_date().strftime("%d.%m.%Y")
+
+        if not vehicle or not km or not amount:
+            messagebox.showerror("Hata", "Lütfen zorunlu alanları doldurun (Araç, KM, Miktar)!")
+            return
+
+        try:
+            # Depodaki yakıt miktarını kontrol et
+            if float(amount) > self.current_fuel_level:
+                messagebox.showerror("Hata", "Depoda yeterli yakıt yok!")
+                return
+
+            self.cursor.execute("SELECT id FROM vehicles WHERE plate=?", (vehicle,))
+            vehicle_id = self.cursor.fetchone()[0]
+
+            km = int(km)
+            amount = float(amount)
+            price = float(price)
+            total = amount * price
+
+            selected = self.fuel_tree.selection()
+            if selected:  # Update
+                record_id = self.fuel_tree.item(selected[0])['values'][0]
+                self.cursor.execute(
+                    "UPDATE fuel_records SET vehicle_id=?, date=?, km=?, amount=?, price=?, total=? WHERE id=?",
+                    (vehicle_id, date, km, amount, price, total, record_id))
+                messagebox.showinfo("Başarılı", "Yakıt kaydı güncellendi!")
+            else:  # Insert
+                self.cursor.execute(
+                    "INSERT INTO fuel_records (vehicle_id, date, km, amount, price, total) VALUES (?, ?, ?, ?, ?, ?)",
+                    (vehicle_id, date, km, amount, price, total))
+                messagebox.showinfo("Başarılı", "Yakıt kaydı eklendi!")
+
+                # Depodan yakıt çıkışı yap
+                self.cursor.execute("""
+                INSERT INTO fuel_tank 
+                (date, amount, price, total, transaction_type, notes)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """, (date, amount, price, total, "OUT", f"{vehicle} aracına yakıt verildi"))
+
+            # Update vehicle km
+            self.cursor.execute("UPDATE vehicles SET km=? WHERE id=?", (km, vehicle_id))
+
+            self.conn.commit()
+            self.load_fuel_records()
+            self.load_depo_records()  # Depo kayıtlarını yenile
+            self.load_vehicles()
+
+            # Clear form
+            self.fuel_km_entry.delete(0, tk.END)
+            self.fuel_amount_entry.delete(0, tk.END)
+
+        except ValueError:
+            messagebox.showerror("Hata", "Geçersiz sayısal değer!")
+        except Exception as e:
+            messagebox.showerror("Hata", f"Kayıt sırasında hata: {str(e)}")
+            self.conn.rollback()
+
+
+    def save_depo_record(self):
+        """Depo doldurma işlemini kaydeder - Sadece giriş işlemi"""
+        # Verileri al
+        amount = self.depo_amount_entry.get().strip()
+        price = self.depo_price_entry.get().strip()
+        date = self.depo_date_entry.get_date().strftime("%d.%m.%Y")
+        notes = self.depo_notes_entry.get().strip()
+
+        # Validasyon
+        if not amount or not price:
+            messagebox.showerror("Hata", "Lütfen miktar ve fiyat bilgilerini girin!")
+            return
+
+        try:
+            amount = float(amount)
+            price = float(price)
+
+            if amount <= 0:
+                messagebox.showerror("Hata", "Miktar 0'dan büyük olmalıdır!")
+                return
+
+            if price <= 0:
+                messagebox.showerror("Hata", "Fiyat 0'dan büyük olmalıdır!")
+                return
+
+            total = amount * price
+
+            # Seçili kaydı kontrol et
+            selected = self.depo_tree.selection()
+
+            if selected:  # Kayıt güncelleme
+                record_id = self.depo_tree.item(selected[0])['values'][0]
+                self.cursor.execute("""
+                UPDATE fuel_tank 
+                SET date=?, amount=?, price=?, total=?, notes=?
+                WHERE id=? AND transaction_type='IN'
+                """, (date, amount, price, total, notes, record_id))
+                message = "Depo kaydı güncellendi!"
+            else:  # Yeni kayıt
+                self.cursor.execute("""
+                INSERT INTO fuel_tank 
+                (date, amount, price, total, transaction_type, notes)
+                VALUES (?, ?, ?, ?, 'IN', ?)
+                """, (date, amount, price, total, notes))
+                message = "Depo doldurma kaydı eklendi!"
+
+            # Yakıt fiyatını güncelle
+            self.current_fuel_price = price
+            self.fiyat_label.config(text=f"Mevcut Yakıt Fiyatı: {self.current_fuel_price:.2f} TL")
+            self.fuel_price_entry.delete(0, tk.END)
+            self.fuel_price_entry.insert(0, f"{self.current_fuel_price:.2f}")
+
+            # Değişiklikleri kaydet ve arayüzü güncelle
+            self.conn.commit()
+            self.load_depo_records()
+            self.clear_depo_form()
+
+            messagebox.showinfo("Başarılı", message)
+
+        except ValueError:
+            messagebox.showerror("Hata", "Geçersiz sayısal değer!")
+        except Exception as e:
+            messagebox.showerror("Hata", f"Kayıt sırasında hata: {str(e)}")
+            self.conn.rollback()
+
+
+    def load_depo_records(self):
+        """Depo hareketlerini yükler - Yeni sütun yapısı"""
+        try:
+            self.depo_tree.delete(*self.depo_tree.get_children())
+
+            self.cursor.execute("""
+            SELECT 
+                id,
+                date,
+                amount,
+                price,
+                total,
+                COALESCE(notes, '')
+            FROM fuel_tank
+            WHERE transaction_type='IN'
+            ORDER BY date DESC, id DESC
+            LIMIT 200
+            """)
+
+            for i, row in enumerate(self.cursor.fetchall()):
+                tag = 'evenrow' if i % 2 == 0 else 'oddrow'
+                formatted_row = (
+                    row[0],  # ID
+                    row[1],  # Tarih
+                    f"{row[2]:.2f}",  # Miktar
+                    f"{row[3]:.2f}",  # Fiyat
+                    f"{row[4]:.2f}",  # Toplam
+                    row[5]   # Not
+                )
+                self.depo_tree.insert("", tk.END, values=formatted_row, tags=(tag,))
+
+            self.update_fuel_level()
+
+        except Exception as e:
+            messagebox.showerror("Hata", f"Kayıtlar yüklenirken hata: {str(e)}")
+
+
+
+    def save_maintenance(self):
+        vehicle = self.maintenance_vehicle_combo.get()
+        km = self.maintenance_km_entry.get().strip()
+        fault = self.maintenance_fault_entry.get().strip()
+        repair = self.maintenance_repair_entry.get().strip()
+        labor_cost = self.maintenance_labor_cost_entry.get().strip() or "0"
+        material_cost = self.maintenance_material_cost_entry.get().strip() or "0"
+        date = self.maintenance_date_entry.get_date().strftime("%d.%m.%Y")
+        
+        if not vehicle or not km or not fault or not repair:
+            messagebox.showerror("Hata", "Lütfen zorunlu alanları doldurun (Araç, KM, Arıza, İşlem)!")
+            return
+        
+        try:
+            self.cursor.execute("SELECT id FROM vehicles WHERE plate=?", (vehicle,))
+            vehicle_id = self.cursor.fetchone()[0]
+            
+            km = int(km)
+            labor_cost = float(labor_cost)
+            material_cost = float(material_cost)
+            
+            selected = self.maintenance_tree.selection()
+            if selected:  # Update
+                record_id = self.maintenance_tree.item(selected[0])['values'][0]
+                self.cursor.execute(
+                    """UPDATE maintenance 
+                    SET vehicle_id=?, date=?, km=?, fault=?, repair=?, labor_cost=?, material_cost=?
+                    WHERE id=?""",
+                    (vehicle_id, date, km, fault, repair, labor_cost, material_cost, record_id))
+                messagebox.showinfo("Başarılı", "Bakım kaydı güncellendi!")
+            else:  # Insert
+                self.cursor.execute(
+                    """INSERT INTO maintenance 
+                    (vehicle_id, date, km, fault, repair, labor_cost, material_cost) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (vehicle_id, date, km, fault, repair, labor_cost, material_cost))
+                messagebox.showinfo("Başarılı", "Bakım kaydı eklendi!")
+            
+            # Update vehicle km
+            self.cursor.execute("UPDATE vehicles SET km=? WHERE id=?", (km, vehicle_id))
+            
+            self.conn.commit()
+            self.load_maintenance_records()
+            self.load_vehicles()
+            
+            # Clear form
+            self.clear_maintenance_form()
+            
+        except ValueError:
+            messagebox.showerror("Hata", "Geçersiz sayısal değer!")
+        except Exception as e:
+            messagebox.showerror("Hata", f"Kayıt sırasında hata: {str(e)}")
+            self.conn.rollback()
+
+    def save_inspection(self):
+        vehicle = self.inspection_vehicle_combo.get()
+        km = self.inspection_km_entry.get().strip()
+        date = self.inspection_date_entry.get_date().strftime("%d.%m.%Y")
+        next_date = self.next_inspection_date_entry.get_date().strftime("%d.%m.%Y")
+        
+        if not vehicle or not km or not date or not next_date:
+            messagebox.showerror("Hata", "Lütfen zorunlu alanları doldurun (Araç, KM, Tarih, Sonraki Muayene)!")
+            return
+        
+        try:
+            self.cursor.execute("SELECT id FROM vehicles WHERE plate=?", (vehicle,))
+            vehicle_id = self.cursor.fetchone()[0]
+            
+            km = int(km)
+            
+            selected = self.inspection_tree.selection()
+            if selected:  # Update
+                record_id = self.inspection_tree.item(selected[0])['values'][0]
+                self.cursor.execute(
+                    """UPDATE inspections 
+                    SET vehicle_id=?, date=?, km=?, next_inspection_date=?
+                    WHERE id=?""",
+                    (vehicle_id, date, km, next_date, record_id))
+                messagebox.showinfo("Başarılı", "Muayene kaydı güncellendi!")
+            else:  # Insert
+                self.cursor.execute(
+                    """INSERT INTO inspections 
+                    (vehicle_id, date, km, next_inspection_date) 
+                    VALUES (?, ?, ?, ?)""",
+                    (vehicle_id, date, km, next_date))
+                messagebox.showinfo("Başarılı", "Muayene kaydı eklendi!")
+            
+            # Update vehicle km
+            self.cursor.execute("UPDATE vehicles SET km=? WHERE id=?", (km, vehicle_id))
+            
+            self.conn.commit()
+            self.load_inspection_records()
+            self.load_vehicles()
+            
+            # Clear form
+            self.clear_inspection_form()
+            
+        except ValueError:
+            messagebox.showerror("Hata", "Geçersiz sayısal değer!")
+        except Exception as e:
+            messagebox.showerror("Hata", f"Kayıt sırasında hata: {str(e)}")
+            self.conn.rollback()
+
+    def save_periodic_maintenance(self):
+        vehicle = self.maintenance_vehicle_combo2.get()
+        km = self.maintenance_km_entry2.get().strip()
+        date = self.maintenance_date_entry2.get_date().strftime("%d.%m.%Y")
+        next_maintenance_km = self.next_maintenance_km_entry.get().strip()
+        next_maintenance_date = self.next_maintenance_date_entry.get_date().strftime("%d.%m.%Y")
+        
+        if not vehicle or not km or not date or not next_maintenance_km or not next_maintenance_date:
+            messagebox.showerror("Hata", "Lütfen tüm alanları doldurun!")
+            return
+        
+        try:
+            self.cursor.execute("SELECT id FROM vehicles WHERE plate=?", (vehicle,))
+            vehicle_id = self.cursor.fetchone()[0]
+            
+            km = int(km)
+            next_maintenance_km = int(next_maintenance_km)
+            
+            selected = self.inspection_tree.selection()
+            if selected:  # Update
+                record_id = self.inspection_tree.item(selected[0])['values'][0]
+                self.cursor.execute(
+                    """UPDATE inspections 
+                    SET vehicle_id=?, date=?, km=?, next_maintenance_km=?, next_maintenance_date=?
+                    WHERE id=?""",
+                    (vehicle_id, date, km, next_maintenance_km, next_maintenance_date, record_id))
+                messagebox.showinfo("Başarılı", "Periyodik bakım kaydı güncellendi!")
+            else:  # Insert
+                self.cursor.execute(
+                    """INSERT INTO inspections 
+                    (vehicle_id, date, km, next_maintenance_km, next_maintenance_date) 
+                    VALUES (?, ?, ?, ?, ?)""",
+                    (vehicle_id, date, km, next_maintenance_km, next_maintenance_date))
+                messagebox.showinfo("Başarılı", "Periyodik bakım kaydı eklendi!")
+            
+            # Update vehicle km
+            self.cursor.execute("UPDATE vehicles SET km=? WHERE id=?", (km, vehicle_id))
+            
+            self.conn.commit()
+            self.load_inspection_records()
+            self.load_vehicles()
+            
+            # Clear form
+            self.clear_periodic_maintenance_form()
+            
+        except ValueError:
+            messagebox.showerror("Hata", "Geçersiz sayısal değer!")
+        except Exception as e:
+            messagebox.showerror("Hata", f"Kayıt sırasında hata: {str(e)}")
+            self.conn.rollback()
+
+    def delete_vehicle(self):
+        selected = self.vehicle_tree.selection()
+        if not selected:
+            messagebox.showerror("Hata", "Lütfen silmek istediğiniz aracı seçin!")
+            return
+            
+        plate = self.vehicle_tree.item(selected[0])['values'][0]
+        
+        if messagebox.askyesno("Onay", f"{plate} plakalı aracı silmek istediğinize emin misiniz?"):
+            try:
+                # First delete related records
+                self.cursor.execute("DELETE FROM fuel_records WHERE vehicle_id IN (SELECT id FROM vehicles WHERE plate=?)", (plate,))
+                self.cursor.execute("DELETE FROM maintenance WHERE vehicle_id IN (SELECT id FROM vehicles WHERE plate=?)", (plate,))
+                self.cursor.execute("DELETE FROM inspections WHERE vehicle_id IN (SELECT id FROM vehicles WHERE plate=?)", (plate,))
+                
+                # Then delete the vehicle
+                self.cursor.execute("DELETE FROM vehicles WHERE plate=?", (plate,))
+                self.conn.commit()
+                
+                messagebox.showinfo("Başarılı", "Araç ve ilişkili kayıtlar silindi!")
+                self.load_vehicles()
+                self.load_fuel_records()
+                self.load_maintenance_records()
+                self.load_inspection_records()
+                self.update_vehicle_combos()
+                self.clear_vehicle_form()
+                
+            except Exception as e:
+                messagebox.showerror("Hata", f"Silme işlemi sırasında hata: {str(e)}")
+                self.conn.rollback()
+
+    def delete_fuel_record(self):
+        selected = self.fuel_tree.selection()
+        if not selected:
+            messagebox.showerror("Hata", "Lütfen silmek istediğiniz kaydı seçin!")
+            return
+            
+        record_id = self.fuel_tree.item(selected[0])['values'][0]
+        
+        if messagebox.askyesno("Onay", "Bu yakıt kaydını silmek istediğinize emin misiniz?"):
+            try:
+                self.cursor.execute("DELETE FROM fuel_records WHERE id=?", (record_id,))
+                self.conn.commit()
+                messagebox.showinfo("Başarılı", "Yakıt kaydı silindi!")
+                self.load_fuel_records()
+            except Exception as e:
+                messagebox.showerror("Hata", f"Silme işlemi sırasında hata: {str(e)}")
+                self.conn.rollback()
+
+    def delete_depo_record(self):
+        """Seçili depo kaydını siler"""
+        selected = self.depo_tree.selection()
+        if not selected:
+            messagebox.showerror("Hata", "Lütfen silmek istediğiniz kaydı seçin!")
+            return
+            
+        record_id = self.depo_tree.item(selected[0])['values'][0]
+        record_date = self.depo_tree.item(selected[0])['values'][1]
+        record_type = self.depo_tree.item(selected[0])['values'][2]
         
         if not messagebox.askyesno(
             "Onay", 
-            f"{tarih} tarihli {miktar}L depo dolum kaydını silmek istediğinize emin misiniz?\nBu işlem geri alınamaz!"
+            f"{record_date} tarihli {record_type} işlemini silmek istediğinize emin misiniz?\n"
+            "Bu işlem geri alınamaz!"
         ):
             return
         
         try:
-            miktar = float(miktar)
-            
-            # Depo durumunu güncelle (miktarı çıkar)
-            self.cursor.execute(
-                "UPDATE depo SET mevcut_yakit = mevcut_yakit - ?, son_guncelleme = datetime('now') WHERE depo_id = 1",
-                (miktar,)
-            )
-            
-            # Kaydı sil
-            self.cursor.execute(
-                "DELETE FROM depo_dolumlari WHERE tarih = ? AND miktar = ?",
-                (tarih, miktar)
-            )
-            
+            self.cursor.execute("DELETE FROM fuel_tank WHERE id=?", (record_id,))
             self.conn.commit()
-            self.show_success("Depo dolum kaydı başarıyla silindi!")
             
-            self.depo_kayitlarini_yukle()
-            self.depo_durumunu_guncelle()
+            # Arayüzü güncelle
+            self.load_depo_records()
+            self.clear_depo_form()
             
+            messagebox.showinfo("Başarılı", "Depo kaydı silindi!")
         except Exception as e:
-            self.show_error(f"Depo kaydı silinirken hata: {str(e)}")
+            messagebox.showerror("Hata", f"Silme işlemi sırasında hata: {str(e)}")
             self.conn.rollback()
 
-    def filtrele(self):
-        """Raporları filtreler"""
-        arac = self.rapor_arac_combobox.get()
-        ay = self.rapor_ay_combobox.get()
-        
-        # Aracı filtrele
-        arac_kosulu = ""
-        if arac and arac != "Tüm Araçlar":
-            try:
-                arac_id = int(arac.split("ID:")[1].rstrip(")"))
-                arac_kosulu = f"AND y.arac_id = {arac_id}"
-            except:
-                self.show_error("Geçersiz araç seçimi!")
-                return
-        
-        # Ayı filtrele
-        ay_kosulu = ""
-        if ay and ay != "Tüm Aylar":
-            ay_kosulu = f"AND strftime('%m-%Y', y.tarih) = '{ay}'"
-        
-        try:
-            # Rapor tablosunu güncelle
-            for row in self.rapor_tree.get_children():
-                self.rapor_tree.delete(row)
-            
-            query = f'''
-            SELECT y.tarih, a.plaka, y.km, y.yakit_miktari, y.notlar
-            FROM yakit_kayitlari y
-            JOIN araclar a ON y.arac_id = a.arac_id
-            WHERE 1=1 {arac_kosulu} {ay_kosulu}
-            ORDER BY y.tarih DESC
-            LIMIT 500
-            '''
-            
-            self.cursor.execute(query)
-            for row in self.cursor.fetchall():
-                self.rapor_tree.insert("", tk.END, values=row)
-            
-            # İstatistikleri hesapla
-            self.yakit_istatistiklerini_hesapla()
-            
-        except Exception as e:
-            self.show_error(f"Filtreleme sırasında hata: {str(e)}")
-
-    def yakit_istatistiklerini_hesapla(self):
-        """Yakıt tüketim istatistiklerini hesaplar (L/100km cinsinden)"""
-        try:
-            arac = self.rapor_arac_combobox.get()
-            
-            if not arac or arac == "Tüm Araçlar":
-                self.ortalama_tuketim_label.config(text="Genel Ortalama (L/100km): -")
-                self.aylik_ortalama_label.config(text="Aylık Ortalama (L/100km): -")
-                self.yillik_ortalama_label.config(text="Yıllık Ortalama (L/100km): -")
-                return
-                
-            arac_id = int(arac.split("ID:")[1].rstrip(")"))
-            
-            # 1. GENEL ORTALAMA (L/100km)
-            self.cursor.execute('''
-            SELECT MIN(km), MAX(km), SUM(yakit_miktari) 
-            FROM yakit_kayitlari 
-            WHERE arac_id = ?
-            ''', (arac_id,))
-            
-            min_km, max_km, toplam_yakit = self.cursor.fetchone()
-            
-            if min_km is None or max_km is None:
-                self.ortalama_tuketim_label.config(text="Genel Ortalama (L/100km): Veri yok")
-            else:
-                toplam_km = max_km - min_km
-                if toplam_km > 0:
-                    ortalama = (toplam_yakit / toplam_km) * 100
-                    self.ortalama_tuketim_label.config(
-                        text=f"Genel Ortalama: {ortalama:.2f} L/100km"
-                    )
-                else:
-                    self.ortalama_tuketim_label.config(text="Genel Ortalama (L/100km): KM hatası")
-
-            # 2. AYLIK ORTALAMALAR (L/100km)
-            self.cursor.execute('''
-            SELECT strftime('%m-%Y', tarih) as ay,
-                   MIN(km) as bas_km,
-                   MAX(km) as son_km,
-                   SUM(yakit_miktari) as yakit
-            FROM yakit_kayitlari
-            WHERE arac_id = ?
-            GROUP BY ay
-            HAVING son_km > bas_km AND COUNT(*) > 1
-            ORDER BY ay
-            ''', (arac_id,))
-            
-            aylik_veriler = self.cursor.fetchall()
-            
-            if aylik_veriler:
-                aylik_ortalama = sum(
-                    (yakit/(son_km-bas_km)*100) 
-                    for ay, bas_km, son_km, yakit in aylik_veriler
-                ) / len(aylik_veriler)
-                
-                self.aylik_ortalama_label.config(
-                    text=f"Aylık Ortalama: {aylik_ortalama:.2f} L/100km"
-                )
-            else:
-                self.aylik_ortalama_label.config(text="Aylık Ortalama (L/100km): Veri yok")
-
-            # 3. YILLIK ORTALAMALAR (L/100km)
-            self.cursor.execute('''
-            SELECT strftime('%Y', tarih) as yil,
-                   MIN(km) as bas_km,
-                   MAX(km) as son_km,
-                   SUM(yakit_miktari) as yakit
-            FROM yakit_kayitlari
-            WHERE arac_id = ?
-            GROUP BY yil
-            HAVING son_km > bas_km AND COUNT(*) > 1
-            ORDER BY yil
-            ''', (arac_id,))
-            
-            yillik_veriler = self.cursor.fetchall()
-            
-            if yillik_veriler:
-                yillik_ortalama = sum(
-                    (yakit/(son_km-bas_km)*100) 
-                    for yil, bas_km, son_km, yakit in yillik_veriler
-                ) / len(yillik_veriler)
-                
-                self.yillik_ortalama_label.config(
-                    text=f"Yıllık Ortalama: {yillik_ortalama:.2f} L/100km"
-                )
-            else:
-                self.yillik_ortalama_label.config(text="Yıllık Ortalama (L/100km): Veri yok")
-
-        except Exception as e:
-            self.show_error(f"İstatistik hesaplanırken hata: {str(e)}")
-
-    def show_data_analysis(self):
-        """Yakıt tüketim grafiğini gösterir"""
-        arac = self.rapor_arac_combobox.get()
-        
-        if not arac or arac == "Tüm Araçlar":
-            self.show_error("Lütfen bir araç seçin!")
+    def delete_maintenance(self):
+        selected = self.maintenance_tree.selection()
+        if not selected:
+            messagebox.showerror("Hata", "Lütfen silmek istediğiniz kaydı seçin!")
             return
             
-        arac_id = int(arac.split("ID:")[1].rstrip(")"))
+        record_id = self.maintenance_tree.item(selected[0])['values'][0]
         
+        if messagebox.askyesno("Onay", "Bu bakım kaydını silmek istediğinize emin misiniz?"):
+            try:
+                self.cursor.execute("DELETE FROM maintenance WHERE id=?", (record_id,))
+                self.conn.commit()
+                messagebox.showinfo("Başarılı", "Bakım kaydı silindi!")
+                self.load_maintenance_records()
+            except Exception as e:
+                messagebox.showerror("Hata", f"Silme işlemi sırasında hata: {str(e)}")
+                self.conn.rollback()
+
+    def delete_inspection(self):
+        selected = self.inspection_tree.selection()
+        if not selected:
+            messagebox.showerror("Hata", "Lütfen silmek istediğiniz kaydı seçin!")
+            return
+            
+        record_id = self.inspection_tree.item(selected[0])['values'][0]
+        
+        if messagebox.askyesno("Onay", "Bu muayene kaydını silmek istediğinize emin misiniz?"):
+            try:
+                self.cursor.execute("DELETE FROM inspections WHERE id=?", (record_id,))
+                self.conn.commit()
+                messagebox.showinfo("Başarılı", "Muayene kaydı silindi!")
+                self.load_inspection_records()
+            except Exception as e:
+                messagebox.showerror("Hata", f"Silme işlemi sırasında hata: {str(e)}")
+                self.conn.rollback()
+
+    def delete_periodic_maintenance(self):
+        self.delete_inspection()
+
+    def calculate_fuel_cost(self):
         try:
-            self.cursor.execute('''
-            SELECT y.tarih, y.km, y.yakit_miktari
-            FROM yakit_kayitlari y
-            WHERE y.arac_id = ?
-            ORDER BY y.tarih
-            ''', (arac_id,))
+            amount = float(self.fuel_amount_entry.get() or 0)
+            price = float(self.fuel_price_entry.get() or self.current_fuel_price)
+            total = amount * price
+            messagebox.showinfo("Hesaplama", f"Toplam maliyet: {total:.2f} TL")
+        except ValueError:
+            messagebox.showerror("Hata", "Geçersiz sayısal değer!")
+
+    def calculate_depo_cost(self):
+        """Depo işlemi maliyetini hesaplar"""
+        try:
+            amount = self.depo_amount_entry.get().strip()
+            price = self.depo_price_entry.get().strip()
             
-            veriler = self.cursor.fetchall()
+            if not amount or not price:
+                messagebox.showerror("Hata", "Lütfen miktar ve fiyat bilgilerini girin!")
+                return
+                
+            amount = float(amount)
+            price = float(price)
             
-            if len(veriler) < 2:
-                self.show_error("Grafik oluşturmak için yeterli veri yok!")
+            if amount <= 0:
+                messagebox.showerror("Hata", "Miktar 0'dan büyük olmalıdır!")
+                return
+                
+            if price <= 0:
+                messagebox.showerror("Hata", "Fiyat 0'dan büyük olmalıdır!")
                 return
             
-            # Verileri işle
-            tarihler = [datetime.strptime(row[0], "%d-%m-%Y %H:%M") for row in veriler]
-            kmler = [row[1] for row in veriler]
-            yakitlar = [row[2] for row in veriler]
+            total = amount * price
+            transaction_type = "Giriş" if self.transaction_type.get() == "IN" else "Çıkış"
             
-            # Tüketim hesapla (L/100km)
-            tuketimler = []
-            for i in range(1, len(veriler)):
-                km_fark = kmler[i] - kmler[i-1]
-                if km_fark > 0:
-                    tuketim = (yakitlar[i] / km_fark) * 100
-                    tuketimler.append(tuketim)
+            messagebox.showinfo(
+                "Hesaplama Sonucu",
+                f"{amount:.2f} litre yakıt {transaction_type} işlemi\n"
+                f"Birim fiyat: {price:.2f} TL\n"
+                f"Toplam maliyet: {total:.2f} TL"
+            )
+        except ValueError:
+            messagebox.showerror("Hata", "Geçersiz sayısal değer!")
+
+    def filter_reports(self):
+        vehicle = self.report_vehicle_combo.get()
+        start_date = self.start_date_entry.get_date().strftime("%d.%m.%Y") if self.start_date_entry.get() else ""
+        end_date = self.end_date_entry.get_date().strftime("%d.%m.%Y") if self.end_date_entry.get() else ""
+        report_type = self.report_type_combo.get()
+        
+        if report_type == "Yakıt":
+            self.filter_fuel_reports(vehicle, start_date, end_date)
+        elif report_type == "Bakım":
+            self.filter_maintenance_reports(vehicle, start_date, end_date)
+        elif report_type == "Muayene":
+            self.filter_inspection_reports(vehicle, start_date, end_date)
+
+    def filter_fuel_reports(self, vehicle, start_date, end_date):
+        query = """
+        SELECT f.date, v.plate, f.km, f.amount, f.price, f.total 
+        FROM fuel_records f
+        JOIN vehicles v ON f.vehicle_id = v.id
+        WHERE 1=1
+        """
+        params = []
+        
+        if vehicle and vehicle != "Tüm Araçlar":
+            query += " AND v.plate = ?"
+            params.append(vehicle)
+        
+        if start_date:
+            query += " AND f.date >= ?"
+            params.append(f"{start_date}")
+        
+        if end_date:
+            query += " AND f.date <= ?"
+            params.append(f"{end_date}")
+        
+        query += " ORDER BY f.date DESC"
+        
+        try:
+            self.report_tree.delete(*self.report_tree.get_children())
+            
+            columns = ("Tarih", "Plaka", "KM", "Miktar", "Birim Fiyat", "Toplam")
+            self.report_tree['columns'] = columns
+            for col in columns:
+                self.report_tree.heading(col, text=col)
+                self.report_tree.column(col, width=100)
+            
+            self.cursor.execute(query, params)
+            
+            for i, row in enumerate(self.cursor.fetchall()):
+                tag = 'evenrow' if i % 2 == 0 else 'oddrow'
+                self.report_tree.insert("", tk.END, values=row, tags=(tag,))
+                
+            messagebox.showinfo("Başarılı", "Yakıt raporu filtrelendi!")
+            
+        except Exception as e:
+            messagebox.showerror("Hata", f"Filtreleme sırasında hata: {str(e)}")
+
+    def filter_maintenance_reports(self, vehicle, start_date, end_date):
+        query = """
+        SELECT m.date, v.plate, m.km, m.fault, m.repair, 
+               m.labor_cost, m.material_cost, (m.labor_cost + m.material_cost)
+        FROM maintenance m
+        JOIN vehicles v ON m.vehicle_id = v.id
+        WHERE 1=1
+        """
+        params = []
+        
+        if vehicle and vehicle != "Tüm Araçlar":
+            query += " AND v.plate = ?"
+            params.append(vehicle)
+        
+        if start_date:
+            query += " AND m.date >= ?"
+            params.append(f"{start_date}")
+        
+        if end_date:
+            query += " AND m.date <= ?"
+            params.append(f"{end_date}")
+        
+        query += " ORDER BY m.date DESC"
+        
+        try:
+            self.report_tree.delete(*self.report_tree.get_children())
+            
+            columns = ("Tarih", "Plaka", "KM", "Arıza", "İşlem", "İşçilik", "Malzeme", "Toplam")
+            self.report_tree['columns'] = columns
+            for col in columns:
+                self.report_tree.heading(col, text=col)
+                self.report_tree.column(col, width=100)
+            
+            self.cursor.execute(query, params)
+            
+            for i, row in enumerate(self.cursor.fetchall()):
+                tag = 'evenrow' if i % 2 == 0 else 'oddrow'
+                self.report_tree.insert("", tk.END, values=row, tags=(tag,))
+                
+            messagebox.showinfo("Başarılı", "Bakım raporu filtrelendi!")
+            
+        except Exception as e:
+            messagebox.showerror("Hata", f"Filtreleme sırasında hata: {str(e)}")
+
+    def filter_inspection_reports(self, vehicle, start_date, end_date):
+        query = """
+        SELECT i.date, v.plate, i.km, 
+               COALESCE(i.next_inspection_date, '') as next_inspection,
+               COALESCE(i.next_maintenance_date, '') as next_maintenance,
+               COALESCE(i.next_maintenance_km, '') as next_maintenance_km
+        FROM inspections i
+        JOIN vehicles v ON i.vehicle_id = v.id
+        WHERE 1=1
+        """
+        params = []
+        
+        if vehicle and vehicle != "Tüm Araçlar":
+            query += " AND v.plate = ?"
+            params.append(vehicle)
+        
+        if start_date:
+            query += " AND i.date >= ?"
+            params.append(f"{start_date}")
+        
+        if end_date:
+            query += " AND i.date <= ?"
+            params.append(f"{end_date}")
+        
+        query += " ORDER BY i.date DESC"
+        
+        try:
+            self.report_tree.delete(*self.report_tree.get_children())
+            
+            columns = ("Tarih", "Plaka", "KM", "Sonraki Muayene", "Sonraki Bakım", "Sonraki Bakım KM")
+            self.report_tree['columns'] = columns
+            for col in columns:
+                self.report_tree.heading(col, text=col)
+                self.report_tree.column(col, width=100)
+            
+            self.cursor.execute(query, params)
+            
+            for i, row in enumerate(self.cursor.fetchall()):
+                tag = 'evenrow' if i % 2 == 0 else 'oddrow'
+                self.report_tree.insert("", tk.END, values=row, tags=(tag,))
+                
+            messagebox.showinfo("Başarılı", "Muayene raporu filtrelendi!")
+            
+        except Exception as e:
+            messagebox.showerror("Hata", f"Filtreleme sırasında hata: {str(e)}")
+
+    def calculate_cost(self):
+        vehicle = self.cost_vehicle_combo.get()
+        start_date = self.cost_start_date_entry.get_date().strftime("%d.%m.%Y") if self.cost_start_date_entry.get() else ""
+        end_date = self.cost_end_date_entry.get_date().strftime("%d.%m.%Y") if self.cost_end_date_entry.get() else ""
+        
+        if not start_date or not end_date:
+            messagebox.showerror("Hata", "Lütfen başlangıç ve bitiş tarihlerini seçin!")
+            return
+        
+        try:
+            query = """
+            SELECT 
+                v.plate,
+                SUM(f.amount) as total_amount,
+                SUM(f.total) as total_cost,
+                MIN(f.km) as min_km,
+                MAX(f.km) as max_km
+            FROM fuel_records f
+            JOIN vehicles v ON f.vehicle_id = v.id
+            WHERE f.date BETWEEN ? AND ?
+            """
+            params = [start_date, end_date]
+            
+            if vehicle and vehicle != "Tüm Araçlar":
+                query += " AND v.plate = ?"
+                params.append(vehicle)
+            
+            query += " GROUP BY v.plate"
+            
+            self.cursor.execute(query, params)
+            results = self.cursor.fetchall()
+            
+            if not results:
+                messagebox.showinfo("Bilgi", "Seçilen tarih aralığında kayıt bulunamadı!")
+                return
+            
+            self.cost_tree.delete(*self.cost_tree.get_children())
+            
+            for result in results:
+                plate = result[0]
+                total_amount = result[1]
+                total_cost = result[2]
+                min_km = result[3]
+                max_km = result[4]
+                
+                if min_km is None or max_km is None or min_km == max_km:
+                    avg_consumption = 0
                 else:
-                    tuketimler.append(0)
+                    km_diff = max_km - min_km
+                    avg_consumption = (total_amount / km_diff) * 100 if km_diff > 0 else 0
+                
+                self.cost_tree.insert("", tk.END, values=(
+                    plate,
+                    f"{total_amount:.2f}",
+                    f"{total_cost:.2f}",
+                    f"{avg_consumption:.2f}"
+                ))
             
-            # Grafik penceresi oluştur
+        except Exception as e:
+            messagebox.showerror("Hata", f"Maliyet hesaplanırken hata: {str(e)}")
+
+    def check_notifications(self):
+        today = datetime.now().date()
+        sixty_days_later = today + timedelta(days=60)
+        
+        # Bakım uyarıları (KM bazlı)
+        self.cursor.execute("""
+        SELECT v.plate, i.next_maintenance_km, v.km 
+        FROM inspections i
+        JOIN vehicles v ON i.vehicle_id = v.id
+        WHERE i.next_maintenance_km IS NOT NULL AND v.km >= i.next_maintenance_km - 1000
+        ORDER BY v.km - i.next_maintenance_km DESC
+        """)
+        maintenance_alerts = self.cursor.fetchall()
+        self.maintenance_notification_count = len(maintenance_alerts)
+        
+        # Muayene uyarıları (tarih bazlı)
+        self.cursor.execute("""
+        SELECT v.plate, i.next_inspection_date 
+        FROM inspections i
+        JOIN vehicles v ON i.vehicle_id = v.id
+        WHERE i.next_inspection_date IS NOT NULL
+        ORDER BY i.next_inspection_date
+        """)
+        inspection_alerts = []
+        for alert in self.cursor.fetchall():
+            try:
+                next_date = datetime.strptime(alert[1], "%d.%m.%Y").date()
+                if next_date <= sixty_days_later:
+                    inspection_alerts.append(alert)
+            except ValueError:
+                continue
+        
+        self.inspection_notification_count = len(inspection_alerts)
+        
+        # Menüyü güncelle
+        self.update_notification_menu()
+        self.root.after(60000, self.check_notifications)  # Her 1 dakikada bir kontrol et
+
+    def update_fuel_level(self):
+        """Depodaki yakıt seviyesini günceller"""
+        try:
+            # Toplam yakıt miktarını hesapla
+            self.cursor.execute("""
+            SELECT SUM(
+                CASE 
+                    WHEN transaction_type='IN' THEN amount 
+                    ELSE -amount 
+                END
+            ) FROM fuel_tank
+            """)
+            result = self.cursor.fetchone()
+            self.current_fuel_level = float(result[0]) if result and result[0] else 0.0
+            
+            # Negatif değerleri sıfırla
+            if self.current_fuel_level < 0:
+                self.current_fuel_level = 0.0
+            
+            # Arayüzü güncelle
+            self.fuel_level_var.set(f"Mevcut Yakıt: {self.current_fuel_level:.2f} litre")
+            self.fuel_cm_var.set(f"Seviye: {self.current_fuel_level/22:.2f} cm")
+            
+        except Exception as e:
+            messagebox.showerror("Hata", f"Depo durumu güncellenirken hata: {str(e)}")
+
+    def update_notification_menu(self):
+        if self.maintenance_notification_count > 0:
+            self.notification_menu.entryconfig(0, 
+                label=f"KM Uyarıları ({self.maintenance_notification_count})", 
+                foreground='red')
+        else:
+            self.notification_menu.entryconfig(0, 
+                label="KM Uyarıları", 
+                foreground="black")
+        
+        if self.inspection_notification_count > 0:
+            self.notification_menu.entryconfig(1, 
+                label=f"Tarih Uyarıları ({self.inspection_notification_count})", 
+                foreground='red')
+        else:
+            self.notification_menu.entryconfig(1, 
+                label="Tarih Uyarıları", 
+                foreground="black")
+
+    def show_maintenance_notifications(self):
+        self.cursor.execute("""
+        SELECT v.plate, i.next_maintenance_km, v.km, 
+               v.km - i.next_maintenance_km as km_diff
+        FROM inspections i
+        JOIN vehicles v ON i.vehicle_id = v.id
+        WHERE i.next_maintenance_km IS NOT NULL AND v.km >= i.next_maintenance_km - 1000
+        ORDER BY km_diff DESC
+        """)
+        alerts = self.cursor.fetchall()
+        
+        if not alerts:
+            messagebox.showinfo("Bilgi", "Bakım gerektiren araç bulunamadı!")
+            return
+        
+        alert_window = tk.Toplevel(self.root)
+        alert_window.title("Bakım Uyarıları")
+        alert_window.geometry("600x400")
+        
+        columns = ("Plaka", "Bakım KM", "Mevcut KM", "KM Farkı")
+        tree = ttk.Treeview(alert_window, columns=columns, show="headings")
+        
+        for col in columns:
+            tree.heading(col, text=col)
+            tree.column(col, width=120, anchor="center")
+        
+        scrollbar = ttk.Scrollbar(alert_window, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=scrollbar.set)
+        
+        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        for i, alert in enumerate(alerts):
+            km_diff = alert[3]
+            if km_diff >= 0:
+                km_diff_str = f"+{km_diff} (GEÇMİŞ)"
+            else:
+                km_diff_str = f"{km_diff} (KALAN)"
+            
+            tree.insert("", tk.END, values=(
+                alert[0], alert[1], alert[2], km_diff_str
+            ))
+        
+        ttk.Button(
+            alert_window, 
+            text="Kapat", 
+            command=alert_window.destroy,
+            style='Primary.TButton'
+        ).pack(pady=10)
+
+    def show_inspection_notifications(self):
+        today = datetime.now().date()
+        sixty_days_later = today + timedelta(days=60)
+        
+        # Muayene uyarıları
+        self.cursor.execute("""
+        SELECT v.plate, i.next_inspection_date
+        FROM inspections i
+        JOIN vehicles v ON i.vehicle_id = v.id
+        WHERE i.next_inspection_date IS NOT NULL
+        ORDER BY i.next_inspection_date
+        """)
+        
+        inspection_alerts = []
+        for alert in self.cursor.fetchall():
+            try:
+                next_date = datetime.strptime(alert[1], "%d.%m.%Y").date()
+                days_diff = (next_date - today).days
+                if next_date <= sixty_days_later:
+                    inspection_alerts.append((alert[0], alert[1], days_diff))
+            except ValueError:
+                continue
+        
+        # Periyodik bakım uyarıları
+        self.cursor.execute("""
+        SELECT v.plate, i.next_maintenance_date
+        FROM inspections i
+        JOIN vehicles v ON i.vehicle_id = v.id
+        WHERE i.next_maintenance_date IS NOT NULL
+        ORDER BY i.next_maintenance_date
+        """)
+        
+        maintenance_alerts = []
+        for alert in self.cursor.fetchall():
+            try:
+                next_date = datetime.strptime(alert[1], "%d.%m.%Y").date()
+                days_diff = (next_date - today).days
+                if next_date <= sixty_days_later:
+                    maintenance_alerts.append((alert[0], alert[1], days_diff))
+            except ValueError:
+                continue
+        
+        if not inspection_alerts and not maintenance_alerts:
+            messagebox.showinfo("Bilgi", "Yaklaşan muayene veya bakım bulunamadı!")
+            return
+        
+        alert_window = tk.Toplevel(self.root)
+        alert_window.title("Muayene ve Bakım Uyarıları")
+        alert_window.geometry("800x600")
+        
+        # Create notebook
+        notebook = ttk.Notebook(alert_window)
+        
+        # Inspection alerts tab
+        if inspection_alerts:
+            inspection_frame = ttk.Frame(notebook)
+            notebook.add(inspection_frame, text="Muayene Uyarıları")
+            
+            columns = ("Plaka", "Sonraki Muayene", "Kalan Gün")
+            tree = ttk.Treeview(inspection_frame, columns=columns, show="headings", selectmode="browse")
+            
+            for col in columns:
+                tree.heading(col, text=col, anchor="center")
+                tree.column(col, width=120, anchor="center")
+            
+            scrollbar = ttk.Scrollbar(inspection_frame, orient="vertical", command=tree.yview)
+            tree.configure(yscrollcommand=scrollbar.set)
+            
+            tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+            
+            # Alternatif satır renkleri
+            tree.tag_configure('oddrow', background=self.lighter_bg)
+            tree.tag_configure('evenrow', background="white")
+            
+            for i, alert in enumerate(inspection_alerts):
+                days_diff = alert[2]
+                if days_diff < 0:
+                    days_str = f"{abs(days_diff)} gün geçmiş"
+                else:
+                    days_str = f"{days_diff} gün kaldı"
+                
+                tag = 'evenrow' if i % 2 == 0 else 'oddrow'
+                tree.insert("", tk.END, values=(
+                    alert[0], alert[1], days_str
+                ), tags=(tag,))
+        
+        # Maintenance alerts tab
+        if maintenance_alerts:
+            maintenance_frame = ttk.Frame(notebook)
+            notebook.add(maintenance_frame, text="Bakım Uyarıları")
+            
+            columns = ("Plaka", "Sonraki Bakım", "Kalan Gün")
+            tree = ttk.Treeview(maintenance_frame, columns=columns, show="headings", selectmode="browse")
+            
+            for col in columns:
+                tree.heading(col, text=col, anchor="center")
+                tree.column(col, width=120, anchor="center")
+            
+            scrollbar = ttk.Scrollbar(maintenance_frame, orient="vertical", command=tree.yview)
+            tree.configure(yscrollcommand=scrollbar.set)
+            
+            tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+            
+            # Alternatif satır renkleri
+            tree.tag_configure('oddrow', background=self.lighter_bg)
+            tree.tag_configure('evenrow', background="white")
+            
+            for i, alert in enumerate(maintenance_alerts):
+                days_diff = alert[2]
+                if days_diff < 0:
+                    days_str = f"{abs(days_diff)} gün geçmiş"
+                else:
+                    days_str = f"{days_diff} gün kaldı"
+                
+                tag = 'evenrow' if i % 2 == 0 else 'oddrow'
+                tree.insert("", tk.END, values=(
+                    alert[0], alert[1], days_str
+                ), tags=(tag,))
+        
+        notebook.pack(fill=tk.BOTH, expand=True)
+        
+        # Close button
+        ttk.Button(
+            alert_window, 
+            text="Kapat", 
+            command=alert_window.destroy,
+            style='Primary.TButton'
+        ).pack(pady=10)
+
+    def show_consumption_graph(self):
+        vehicle = self.report_vehicle_combo.get()
+        
+        if not vehicle or vehicle == "Tüm Araçlar":
+            messagebox.showerror("Hata", "Lütfen bir araç seçin!")
+            return
+            
+        try:
+            self.cursor.execute("""
+            SELECT f.date, f.km, f.amount 
+            FROM fuel_records f
+            JOIN vehicles v ON f.vehicle_id = v.id
+            WHERE v.plate = ?
+            ORDER BY f.date
+            """, (vehicle,))
+            
+            data = self.cursor.fetchall()
+            
+            if len(data) < 2:
+                messagebox.showerror("Hata", "Grafik oluşturmak için yeterli veri yok!")
+                return
+            
+            dates = [datetime.strptime(row[0], "%d.%m.%Y") for row in data]
+            kms = [row[1] for row in data]
+            amounts = [row[2] for row in data]
+            
+            # Calculate consumption (L/100km)
+            consumptions = []
+            for i in range(1, len(data)):
+                km_diff = kms[i] - kms[i-1]
+                if km_diff > 0:
+                    consumption = (amounts[i] / km_diff) * 100
+                    consumptions.append(consumption)
+                else:
+                    consumptions.append(0)
+            
+            # Graph window
             graph_window = tk.Toplevel(self.root)
-            graph_window.title(f"{arac} Yakıt Tüketim Grafiği")
-            graph_window.geometry("900x600")
+            graph_window.title(f"{vehicle} - Yakıt Tüketim Grafiği")
+            graph_window.geometry("800x600")
             
-            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(9, 6))
-            fig.suptitle(f"{arac} Yakıt Tüketim Analizi", fontsize=12)
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 6))
             
-            # KM grafiği
-            ax1.plot(tarihler, kmler, 'b-', marker='o', label='Kilometre')
-            ax1.set_title('Kilometre Takibi')
-            ax1.set_ylabel('KM')
+            # KM graph
+            ax1.plot(dates, kms, 'b-', marker='o')
+            ax1.set_title('Kilometre Takibi', color=self.dark_text)
+            ax1.set_ylabel('KM', color=self.dark_text)
+            ax1.tick_params(axis='x', colors=self.dark_text)
+            ax1.tick_params(axis='y', colors=self.dark_text)
             ax1.grid(True)
-            ax1.legend()
             
-            # Tüketim grafiği
-            ax2.plot(tarihler[1:], tuketimler, 'r-', marker='o', label='Tüketim (L/100km)')
-            ax2.set_title('Yakıt Tüketimi')
-            ax2.set_ylabel('L/100km')
+            # Consumption graph
+            ax2.plot(dates[1:], consumptions, 'r-', marker='o')
+            ax2.set_title('Yakıt Tüketimi (L/100km)', color=self.dark_text)
+            ax2.set_ylabel('Tüketim', color=self.dark_text)
+            ax2.tick_params(axis='x', colors=self.dark_text)
+            ax2.tick_params(axis='y', colors=self.dark_text)
             ax2.grid(True)
-            ax2.legend()
             
             plt.tight_layout()
             
-            # Grafiği Tkinter'a göm
+            # Show graph
             canvas = FigureCanvasTkAgg(fig, master=graph_window)
             canvas.draw()
             canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
             
-            # Kapatma butonu
+            # Close button
             ttk.Button(
                 graph_window, 
                 text="Kapat", 
-                command=graph_window.destroy
-            ).pack(pady=5)
+                command=graph_window.destroy,
+                style='Primary.TButton'
+            ).pack(pady=10)
             
         except Exception as e:
-            self.show_error(f"Grafik oluşturulurken hata: {str(e)}")
+            messagebox.showerror("Hata", f"Grafik oluşturulurken hata: {str(e)}")
 
-    def backup_database(self):
-        """Veritabanı yedeği alır"""
+    def show_cost_report(self):
+        cost_window = tk.Toplevel(self.root)
+        cost_window.title("Toplam Maliyet Raporu")
+        cost_window.geometry("800x600")
+        
         try:
-            if not os.path.exists(self.db_path):
-                self.show_error("Veritabanı dosyası bulunamadı!")
-                return
-
-            backup_dir = os.path.join(os.path.expanduser("~"), "Desktop")
-            if not os.path.exists(backup_dir):
-                backup_dir = os.path.dirname(self.db_path)
+            # Fuel cost
+            self.cursor.execute("SELECT SUM(total) FROM fuel_records")
+            fuel_cost = self.cursor.fetchone()[0] or 0
             
-            backup_path = filedialog.asksaveasfilename(
-                initialdir=backup_dir,
-                defaultextension=".db",
-                filetypes=[("Database files", "*.db"), ("All files", "*.*")],
-                title="Yedek Dosyasını Kaydet",
-                initialfile=f"yakit_takip_backup_{datetime.now().strftime('%d%m%Y_%H%M%S')}.db"
+            # Maintenance cost
+            self.cursor.execute("SELECT SUM(labor_cost + material_cost) FROM maintenance")
+            maintenance_cost = self.cursor.fetchone()[0] or 0
+            
+            # Total cost
+            total_cost = fuel_cost + maintenance_cost
+            
+            # Graph data
+            labels = ['Yakıt', 'Bakım']
+            sizes = [fuel_cost, maintenance_cost]
+            colors = ['#ff9999','#66b3ff']
+            
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 5))
+            
+            # Pie chart
+            ax1.pie(sizes, labels=labels, colors=colors, autopct='%1.1f%%', startangle=90)
+            ax1.axis('equal')
+            ax1.set_title('Maliyet Dağılımı', color=self.dark_text)
+            
+            # Bar chart
+            ax2.bar(labels, sizes, color=colors)
+            ax2.set_title('Maliyetler', color=self.dark_text)
+            ax2.set_ylabel('TL', color=self.dark_text)
+            ax2.tick_params(axis='x', colors=self.dark_text)
+            ax2.tick_params(axis='y', colors=self.dark_text)
+            
+            plt.tight_layout()
+            
+            # Show graph
+            canvas = FigureCanvasTkAgg(fig, master=cost_window)
+            canvas.draw()
+            canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+            
+            # Total cost info
+            ttk.Label(
+                cost_window, 
+                text=f"Toplam Maliyet: {total_cost:.2f} TL\n"
+                     f"Yakıt: {fuel_cost:.2f} TL\n"
+                     f"Bakım: {maintenance_cost:.2f} TL",
+                font=self.subtitle_font,
+                foreground=self.dark_text
+            ).pack(pady=10)
+            
+            # Close button
+            ttk.Button(
+                cost_window, 
+                text="Kapat", 
+                command=cost_window.destroy,
+                style='Primary.TButton'
+            ).pack(pady=10)
+            
+        except Exception as e:
+            messagebox.showerror("Hata", f"Rapor oluşturulurken hata: {str(e)}")
+            cost_window.destroy()
+
+    def create_backup(self):
+        try:
+            backup_dir = filedialog.askdirectory(title="Yedek Kaydedilecek Klasörü Seçin")
+            if backup_dir:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                backup_path = os.path.join(backup_dir, f"arac_takip_backup_{timestamp}.db")
+                
+                # Copy current database
+                with open(self.db_path, 'rb') as f:
+                    db_content = f.read()
+                
+                with open(backup_path, 'wb') as f:
+                    f.write(db_content)
+                
+                messagebox.showinfo("Başarılı", f"Yedek başarıyla oluşturuldu:\n{backup_path}")
+        except Exception as e:
+            messagebox.showerror("Hata", f"Yedek oluşturulurken hata: {str(e)}")
+
+    def restore_backup(self):
+        try:
+            backup_path = filedialog.askopenfilename(
+                title="Yedek Dosyasını Seçin",
+                filetypes=[("Veritabanı Dosyaları", "*.db"), ("Tüm Dosyalar", "*.*")]
             )
             
-            if not backup_path:
-                return
-
-            # Veritabanı bağlantısını kapat
-            self.conn.close()
-            
-            try:
-                # Dosyayı kopyala
-                with open(self.db_path, 'rb') as f_source:
-                    with open(backup_path, 'wb') as f_target:
-                        while True:
-                            chunk = f_source.read(1024*1024)  # 1MB'lık parçalar halinde
-                            if not chunk:
-                                break
-                            f_target.write(chunk)
-                
-                self.show_success(f"Veritabanı yedeği başarıyla alındı:\n{backup_path}")
-                
-            except PermissionError:
-                self.show_error("Dosya yazma izni reddedildi! Lütfen farklı bir konum seçin.")
-            except Exception as e:
-                self.show_error(f"Yedek alınırken hata oluştu: {str(e)}")
-            
-            # Veritabanına yeniden bağlan
-            self.conn = sqlite3.connect(self.db_path)
-            self.cursor = self.conn.cursor()
-            
+            if backup_path:
+                if messagebox.askyesno("Onay", "Yedekten geri yükleme yapılacak. Mevcut veriler silinecek. Devam etmek istiyor musunuz?"):
+                    # Close current connection
+                    self.conn.close()
+                    
+                    # Copy backup to main database
+                    with open(backup_path, 'rb') as f:
+                        backup_content = f.read()
+                    
+                    with open(self.db_path, 'wb') as f:
+                        f.write(backup_content)
+                    
+                    # Restart application
+                    messagebox.showinfo("Başarılı", "Yedek başarıyla geri yüklendi. Uygulama yeniden başlatılacak.")
+                    self.root.destroy()
+                    
+                    # Start new instance
+                    root = tk.Tk()
+                    app = AraçTakipUygulaması(root)
+                    root.mainloop()
+                    
         except Exception as e:
-            self.show_error(f"Yedekleme işlemi sırasında hata: {str(e)}")
-            try:
-                self.conn = sqlite3.connect(self.db_path)
-                self.cursor = self.conn.cursor()
-            except:
-                self.show_error("Veritabanına yeniden bağlanılamadı! Programı yeniden başlatın.")
+            messagebox.showerror("Hata", f"Yedekten geri yükleme sırasında hata: {str(e)}")
 
-    def generate_excel_report(self):
-        """Excel raporu oluşturur"""
-        if not HAS_EXCEL:
-            self.show_error("Excel raporlama özelliği devre dışı (openpyxl kurulu değil)")
-            return
-            
+    def update_fuel_price(self):
+        new_price = simpledialog.askfloat(
+            "Yakıt Fiyatı Güncelle", 
+            "Yeni yakıt fiyatını girin (TL/L):",
+            initialvalue=self.current_fuel_price
+        )
+        
+        if new_price and new_price > 0:
+            self.current_fuel_price = new_price
+            self.fiyat_label.config(text=f"Mevcut Yakıt Fiyatı: {self.current_fuel_price:.2f} TL")
+            self.fuel_price_entry.delete(0, tk.END)
+            self.fuel_price_entry.insert(0, f"{self.current_fuel_price:.2f}")
+            self.depo_price_entry.delete(0, tk.END)
+            self.depo_price_entry.insert(0, f"{self.current_fuel_price:.2f}")
+
+    def export_fuel_to_excel(self):
         try:
-            wb = Workbook()
+            # Verileri al
+            self.cursor.execute("""
+            SELECT f.date, v.plate, f.km, f.amount, f.price, f.total 
+            FROM fuel_records f
+            JOIN vehicles v ON f.vehicle_id = v.id
+            ORDER BY f.date DESC
+            """)
+            fuel_data = self.cursor.fetchall()
+            
+            if not fuel_data:
+                messagebox.showwarning("Uyarı", "Dışa aktarılacak yakıt kaydı bulunamadı!")
+                return
+                
+            # Excel dosyası oluştur
+            wb = openpyxl.Workbook()
             ws = wb.active
-            ws.title = "Yakıt Raporu"
+            ws.title = "Yakıt İşlemleri"
             
             # Başlıklar
-            headers = ["Tarih", "Plaka", "KM", "Yakıt Miktarı (L)", "Notlar"]
+            headers = ["Tarih", "Plaka", "KM", "Miktar (L)", "Birim Fiyat (TL)", "Toplam (TL)"]
             ws.append(headers)
             
-            # Başlık stilini ayarla
-            bold_font = Font(bold=True)
-            for cell in ws[1]:
-                cell.font = bold_font
-            
-            # Verileri al
-            self.cursor.execute('''
-            SELECT y.tarih, a.plaka, y.km, y.yakit_miktari, y.notlar
-            FROM yakit_kayitlari y
-            JOIN araclar a ON y.arac_id = a.arac_id
-            ORDER BY y.tarih DESC
-            ''')
-            
-            # Satırları ekle
-            for row in self.cursor.fetchall():
+            # Verileri ekle
+            for row in fuel_data:
                 ws.append(row)
             
+            # Stil ayarları
+            header_font = Font(bold=True, color="FFFFFF")
+            header_fill = PatternFill(start_color="2c3e50", end_color="2c3e50", fill_type="solid")
+            thin_border = Border(left=Side(style='thin'), 
+                                right=Side(style='thin'), 
+                                top=Side(style='thin'), 
+                                bottom=Side(style='thin'))
+            
+            # Başlık stilini ayarla
+            for col in range(1, len(headers)+1):
+                cell = ws.cell(row=1, column=col)
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.border = thin_border
+                cell.alignment = Alignment(horizontal='center')
+            
             # Sütun genişliklerini ayarla
-            for col in ws.columns:
-                max_length = 0
-                column = col[0].column_letter
-                
-                for cell in col:
-                    try:
-                        value = str(cell.value) if cell.value else ""
-                        if len(value) > max_length:
-                            max_length = len(value)
-                    except:
-                        pass
-                
-                adjusted_width = (max_length + 2) * 1.2
-                ws.column_dimensions[column].width = adjusted_width
+            column_widths = [15, 15, 15, 15, 15, 15]
+            for i, column_width in enumerate(column_widths, 1):
+                ws.column_dimensions[get_column_letter(i)].width = column_width
             
-            # Kaydetme iletişim kutusu
-            desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
-            if not os.path.exists(desktop_path):
-                desktop_path = os.path.dirname(self.db_path)
+            # Sayı formatları
+            for row in ws.iter_rows(min_row=2, max_row=ws.max_row, min_col=4, max_col=6):
+                for cell in row:
+                    cell.number_format = '0.00'
             
+            # Dosyayı kaydet
             file_path = filedialog.asksaveasfilename(
-                initialdir=desktop_path,
                 defaultextension=".xlsx",
-                filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")],
-                title="Raporu Kaydet",
-                initialfile=f"yakit_raporu_{datetime.now().strftime('%d%m%Y_%H%M%S')}.xlsx"
+                filetypes=[("Excel Dosyaları", "*.xlsx"), ("Tüm Dosyalar", "*.*")],
+                title="Yakıt İşlemlerini Kaydet"
             )
             
             if file_path:
                 wb.save(file_path)
-                self.show_success(f"Excel raporu başarıyla oluşturuldu:\n{file_path}")
-                
-                # Raporu aç (Windows için)
-                if sys.platform == "win32":
-                    try:
-                        os.startfile(file_path)
-                    except:
-                        pass
+                messagebox.showinfo("Başarılı", f"Yakıt işlemleri başarıyla Excel'e aktarıldı:\n{file_path}")
                 
         except Exception as e:
-            self.show_error(f"Rapor oluşturulurken hata: {str(e)}")
-            
-    def generate_bakim_excel_report(self):
-        """Bakım ve tamirat Excel raporu oluşturur"""
-        if not HAS_EXCEL:
-            self.show_error("Excel raporlama özelliği devre dışı (openpyxl kurulu değil)")
-            return
-        
+            messagebox.showerror("Hata", f"Excel'e aktarım sırasında hata: {str(e)}")
+
+    def export_maintenance_to_excel(self):
         try:
-            wb = Workbook()
-            ws = wb.active
-            ws.title = "Bakım Raporu"
-        
-            # Başlıklar
-            headers = [
-                "Tarih", "Saat", "Plaka", "Tespit Edilen Arıza", 
-                "Yapılan İşlem", "Parça Ücreti", "İşçilik Ücreti", 
-                "Toplam Tutar", "Notlar"
-            ]
-            ws.append(headers)
-        
-            # Başlık stilini ayarla
-            bold_font = Font(bold=True)
-            for cell in ws[1]:
-                cell.font = bold_font
-        
             # Verileri al
-            self.cursor.execute('''
-            SELECT b.tarih, b.saat, a.plaka, b.tespit_edilen_ariza, 
-                   b.yapilan_islem, b.parca_ucreti, b.iscilik_ucreti,
-                   b.toplam_tutar, b.notlar
-            FROM bakim_tamirat b
-            JOIN araclar a ON b.arac_id = a.arac_id
-            ORDER BY b.tarih DESC, b.saat DESC
-            ''')
-        
-            # Satırları ekle
-            for row in self.cursor.fetchall():
+            self.cursor.execute("""
+            SELECT m.date, v.plate, m.km, m.fault, m.repair, 
+                   m.labor_cost, m.material_cost, (m.labor_cost + m.material_cost)
+            FROM maintenance m
+            JOIN vehicles v ON m.vehicle_id = v.id
+            ORDER BY m.date DESC
+            """)
+            maintenance_data = self.cursor.fetchall()
+            
+            if not maintenance_data:
+                messagebox.showwarning("Uyarı", "Dışa aktarılacak bakım kaydı bulunamadı!")
+                return
+                
+            # Excel dosyası oluştur
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Bakım İşlemleri"
+            
+            # Başlıklar
+            headers = ["Tarih", "Plaka", "KM", "Arıza", "Yapılan İşlem", 
+                      "İşçilik Tutarı (TL)", "Malzeme Tutarı (TL)", "Toplam Tutar (TL)"]
+            ws.append(headers)
+            
+            # Verileri ekle
+            for row in maintenance_data:
                 ws.append(row)
-        
+            
+            # Stil ayarları
+            header_font = Font(bold=True, color="FFFFFF")
+            header_fill = PatternFill(start_color="2c3e50", end_color="2c3e50", fill_type="solid")
+            thin_border = Border(left=Side(style='thin'), 
+                                right=Side(style='thin'), 
+                                top=Side(style='thin'), 
+                                bottom=Side(style='thin'))
+            
+            # Başlık stilini ayarla
+            for col in range(1, len(headers)+1):
+                cell = ws.cell(row=1, column=col)
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.border = thin_border
+                cell.alignment = Alignment(horizontal='center')
+            
             # Sütun genişliklerini ayarla
-            for col in ws.columns:
-                max_length = 0
-                column = col[0].column_letter
+            column_widths = [15, 15, 15, 30, 30, 15, 15, 15]
+            for i, column_width in enumerate(column_widths, 1):
+                ws.column_dimensions[get_column_letter(i)].width = column_width
             
-                for cell in col:
-                    try:
-                        value = str(cell.value) if cell.value else ""
-                        if len(value) > max_length:
-                            max_length = len(value)
-                    except:
-                        pass
+            # Sayı formatları
+            for row in ws.iter_rows(min_row=2, max_row=ws.max_row, min_col=6, max_col=8):
+                for cell in row:
+                    cell.number_format = '0.00'
             
-                adjusted_width = (max_length + 2) * 1.2
-                ws.column_dimensions[column].width = adjusted_width
-        
-            # Toplam maliyet satırı ekle
-            self.cursor.execute("SELECT SUM(toplam_tutar) FROM bakim_tamirat")
-            toplam_tutar = self.cursor.fetchone()[0] or 0
-        
-            ws.append([])  # Boş satır
-            ws.append(["TOPLAM MALİYET", "", "", "", "", "", "", toplam_tutar, ""])
-        
-            # Kaydetme iletişim kutusu
-            desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
-            if not os.path.exists(desktop_path):
-                desktop_path = os.path.dirname(self.db_path)
-        
+            # Dosyayı kaydet
             file_path = filedialog.asksaveasfilename(
-                initialdir=desktop_path,
                 defaultextension=".xlsx",
-                filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")],
-                title="Bakım Raporunu Kaydet",
-                initialfile=f"bakim_raporu_{datetime.now().strftime('%d%m%Y_%H%M%S')}.xlsx"
+                filetypes=[("Excel Dosyaları", "*.xlsx"), ("Tüm Dosyalar", "*.*")],
+                title="Bakım İşlemlerini Kaydet"
             )
-        
+            
             if file_path:
                 wb.save(file_path)
-                self.show_success(f"Bakım raporu başarıyla oluşturuldu:\n{file_path}")
-            
-                # Raporu aç (Windows için)
-                if sys.platform == "win32":
-                    try:
-                        os.startfile(file_path)
-                    except:
-                        pass
-            
+                messagebox.showinfo("Başarılı", f"Bakım işlemleri başarıyla Excel'e aktarıldı:\n{file_path}")
+                
         except Exception as e:
-            self.show_error(f"Bakım raporu oluşturulurken hata: {str(e)}")        
+            messagebox.showerror("Hata", f"Excel'e aktarım sırasında hata: {str(e)}")
 
-    def show_help(self):
-        """Yardım bilgisi gösterir"""
-        help_text = """
-        Temelli Yakıt Takip Sistemi Kullanım Kılavuzu
-
-        Araç Yönetimi:
-        - Yeni araç eklemek için plaka, model ve mevcut KM bilgilerini girin
-        - Araç silmek için listeden seçim yapın
-        - Araç detaylarını görüntülemek için "Detayları Gör" butonunu kullanın
-
-        Yakıt İşlemleri:
-        - Yakıt eklemek için araç seçin ve diğer bilgileri girin
-        - Yakıt kaydı silmek için listeden seçim yapın
-
-        Depo Yönetimi:
-        - Depo dolumu yapmak için miktar ve tarih bilgilerini girin
-        - Dolum kaydı silmek için listeden seçim yapın
-
-        Raporlar:
-        - Filtreleme yaparak istatistikleri görüntüleyin
-        - Grafik oluşturarak tüketim analizi yapın
-        - Excel raporu oluşturup dışa aktarın
-
-        Araç Detayları:
-        - Araç bilgilerini görüntüleyin ve güncelleyin
-        - Muayene ve bakım tarihleri için uyarıları görüntüleyin
-        - Araç yakıt kayıtlarını listeleyin
-
-        Bakım ve Tamirat:
-        - Araç bakım ve tamirat kayıtlarını ekleyin/düzenleyin/silin
-        - Parça ve işçilik ücretlerini takip edin
-        - Toplam maliyetleri hesaplayın
-
-        Tema:
-        - Light/Dark tema arasında geçiş yapabilirsiniz
-        """
-        messagebox.showinfo("Yardım", help_text.strip())
-
-    def show_about(self):
-        """Hakkında bilgisi gösterir"""
-        about_text = f"""
-        Temelli Yakıt Takip Sistemi
-
-        Sürüm: 1.0
-        Son Güncelleme: {datetime.now().strftime('%d.%m.%Y')}
-        
-
-        Özellikler:
-        - Araç ve yakıt takibi
-        - Depo yönetimi
-        - Detaylı raporlama
-        - Grafiksel analizler
-        - Excel'e aktarım
-        - Çoklu tema desteği
-        - Araç detay yönetimi (muayene, bakım, şoför bilgileri)
-        - Bakım ve tamirat takibi
-
-        Veritabanı Konumu:
-        {self.db_path}
-        """
-        messagebox.showinfo("Hakkında", about_text.strip())
-
-    def play_sound(self, sound_type):
-        """Ses efekti çalar"""
-        if not HAS_SOUND:
-            return
-            
+    def export_cost_report_to_excel(self):
         try:
-            if sound_type == "success":
-                winsound.MessageBeep(winsound.MB_ICONASTERISK)
-            elif sound_type == "error":
-                winsound.MessageBeep(winsound.MB_ICONHAND)
-            elif sound_type == "SystemStart":
-                winsound.PlaySound("SystemStart", winsound.SND_ALIAS)
-        except:
-            pass
-
-    def show_success(self, message):
-        """Başarı mesajı gösterir"""
-        messagebox.showinfo("Başarılı", message)
-        self.status_message.config(text=message)
-        self.play_sound("success")
-
-    def show_error(self, message):
-        """Hata mesajı gösterir"""
-        messagebox.showerror("Hata", message)
-        self.status_message.config(text=message)
-        self.play_sound("error")
+            # Verileri al (son maliyet raporundaki verileri kullan)
+            items = []
+            for item in self.cost_tree.get_children():
+                items.append(self.cost_tree.item(item)['values'])
+            
+            if not items:
+                messagebox.showwarning("Uyarı", "Dışa aktarılacak maliyet raporu bulunamadı!")
+                return
+                
+            # Excel dosyası oluştur
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Maliyet Raporu"
+            
+            # Başlıklar
+            headers = ["Araç Plakası", "Toplam Yakıt (L)", "Toplam Maliyet (TL)", "Ortalama Tüketim (L/100km)"]
+            ws.append(headers)
+            
+            # Verileri ekle
+            for row in items:
+                ws.append(row)
+            
+            # Stil ayarları
+            header_font = Font(bold=True, color="FFFFFF")
+            header_fill = PatternFill(start_color="2c3e50", end_color="2c3e50", fill_type="solid")
+            thin_border = Border(left=Side(style='thin'), 
+                                right=Side(style='thin'), 
+                                top=Side(style='thin'), 
+                                bottom=Side(style='thin'))
+            
+            # Başlık stilini ayarla
+            for col in range(1, len(headers)+1):
+                cell = ws.cell(row=1, column=col)
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.border = thin_border
+                cell.alignment = Alignment(horizontal='center')
+            
+            # Sütun genişliklerini ayarla
+            column_widths = [20, 20, 20, 20]
+            for i, column_width in enumerate(column_widths, 1):
+                ws.column_dimensions[get_column_letter(i)].width = column_width
+            
+            # Sayı formatları
+            for row in ws.iter_rows(min_row=2, max_row=ws.max_row, min_col=2, max_col=4):
+                for cell in row:
+                    cell.number_format = '0.00'
+            
+            # Toplam satırı ekle
+            if len(items) > 1:
+                ws.append([])  # Boş satır
+                total_row = ["TOPLAM"]
+                
+                # Toplam yakıt
+                total_fuel = sum(float(item[1]) for item in items)
+                total_row.append(total_fuel)
+                
+                # Toplam maliyet
+                total_cost = sum(float(item[2]) for item in items)
+                total_row.append(total_cost)
+                
+                # Ortalama tüketim (ağırlıklı ortalama)
+                total_row.append("")  # Bu hesaplama daha karmaşık olabilir
+                
+                ws.append(total_row)
+                
+                # Toplam satırı stilini ayarla
+                for col in range(1, len(total_row)+1):
+                    cell = ws.cell(row=ws.max_row, column=col)
+                    cell.font = Font(bold=True)
+                    if col > 1 and col < 4:
+                        cell.number_format = '0.00'
+            
+            # Dosyayı kaydet
+            file_path = filedialog.asksaveasfilename(
+                defaultextension=".xlsx",
+                filetypes=[("Excel Dosyaları", "*.xlsx"), ("Tüm Dosyalar", "*.*")],
+                title="Maliyet Raporunu Kaydet"
+            )
+            
+            if file_path:
+                wb.save(file_path)
+                messagebox.showinfo("Başarılı", f"Maliyet raporu başarıyla Excel'e aktarıldı:\n{file_path}")
+                
+        except Exception as e:
+            messagebox.showerror("Hata", f"Excel'e aktarım sırasında hata: {str(e)}")
+            
+    def export_filtered_report_to_excel(self):
+        try:
+            # Mevcut rapor türünü al
+            report_type = self.report_type_combo.get()
+            
+            if report_type == "Yakıt":
+                sheet_name = "Yakıt İşlemleri"
+                headers = ["Tarih", "Plaka", "KM", "Miktar (L)", "Birim Fiyat (TL)", "Toplam (TL)"]
+                data = []
+                for item in self.report_tree.get_children():
+                    data.append(self.report_tree.item(item)['values'])
+            
+            elif report_type == "Bakım":
+                sheet_name = "Bakım İşlemleri"
+                headers = ["Tarih", "Plaka", "KM", "Arıza", "Yapılan İşlem", 
+                          "İşçilik Tutarı (TL)", "Malzeme Tutarı (TL)", "Toplam Tutar (TL)"]
+                data = []
+                for item in self.report_tree.get_children():
+                    data.append(self.report_tree.item(item)['values'])
+            
+            elif report_type == "Muayene":
+                sheet_name = "Muayene Kayıtları"
+                headers = ["Tarih", "Plaka", "KM", "Sonraki Muayene", "Sonraki Bakım", "Sonraki Bakım KM"]
+                data = []
+                for item in self.report_tree.get_children():
+                    data.append(self.report_tree.item(item)['values'])
+            
+            else:
+                messagebox.showwarning("Uyarı", "Geçerli bir rapor türü seçin!")
+                return
+                
+            if not data:
+                messagebox.showwarning("Uyarı", "Dışa aktarılacak veri bulunamadı!")
+                return
+                
+            # Excel dosyası oluştur
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = sheet_name
+            
+            # Başlıkları ekle
+            ws.append(headers)
+            
+            # Verileri ekle
+            for row in data:
+                ws.append(row)
+            
+            # Stil ayarları
+            header_font = Font(bold=True, color="FFFFFF")
+            header_fill = PatternFill(start_color="2c3e50", end_color="2c3e50", fill_type="solid")
+            thin_border = Border(left=Side(style='thin'), 
+                                right=Side(style='thin'), 
+                                top=Side(style='thin'), 
+                                bottom=Side(style='thin'))
+            
+            # Başlık stilini ayarla
+            for col in range(1, len(headers)+1):
+                cell = ws.cell(row=1, column=col)
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.border = thin_border
+                cell.alignment = Alignment(horizontal='center')
+            
+            # Sütun genişliklerini ayarla
+            for col in range(1, len(headers)+1):
+                max_length = max(
+                    len(str(headers[col-1])) if headers[col-1] else 0,
+                    max(len(str(row[col-1])) for row in data) if data else 0
+                )
+                ws.column_dimensions[get_column_letter(col)].width = min(max_length + 2, 30)
+            
+            # Sayı formatları
+            if report_type in ["Yakıt", "Bakım"]:
+                num_cols = range(3, len(headers)) if report_type == "Yakıt" else range(5, len(headers))
+                for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
+                    for col in num_cols:
+                        try:
+                            float(row[col].value)
+                            row[col].number_format = '0.00'
+                        except (ValueError, TypeError):
+                            pass
+            
+            # Dosyayı kaydet
+            file_path = filedialog.asksaveasfilename(
+                defaultextension=".xlsx",
+                filetypes=[("Excel Dosyaları", "*.xlsx"), ("Tüm Dosyalar", "*.*")],
+                title=f"{report_type} Raporunu Kaydet"
+            )
+            
+            if file_path:
+                wb.save(file_path)
+                messagebox.showinfo("Başarılı", f"{report_type} raporu başarıyla Excel'e aktarıldı:\n{file_path}")
+                
+        except Exception as e:
+            messagebox.showerror("Hata", f"Excel'e aktarım sırasında hata: {str(e)}")
 
     def on_closing(self):
-        """Uygulamayı kapatır"""
         if messagebox.askokcancel("Çıkış", "Uygulamadan çıkmak istediğinize emin misiniz?"):
             try:
-                self.conn.close()
+                if hasattr(self, 'conn'):
+                    self.conn.close()
             except:
                 pass
             finally:
                 self.root.destroy()
 
+
 if __name__ == "__main__":
     try:
         root = tk.Tk()
-        app = YakıtTakipUygulaması(root)
+        app = AraçTakipUygulaması(root)
         root.protocol("WM_DELETE_WINDOW", app.on_closing)
         root.mainloop()
     except Exception as e:
-        messagebox.showerror("Başlatma Hatası", f"Uygulama başlatılamadı: {str(e)}")
+        messagebox.showerror("Kritik Hata", f"Uygulama başlatılamadı: {str(e)}")
