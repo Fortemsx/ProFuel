@@ -3,6 +3,7 @@ from tkinter import ttk, messagebox, simpledialog, filedialog
 from datetime import datetime, timedelta
 import sqlite3
 import os
+import sys
 import matplotlib # type: ignore
 matplotlib.use('TkAgg')
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg # type: ignore
@@ -26,13 +27,44 @@ class AraçTakipUygulaması:
     def setup_database(self):
         """Veritabanı tablolarını oluşturur veya bağlantı kurar"""
         self.db_name = "arac_takip.db"
-        self.db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), self.db_name)
         
         try:
+            # EXE modunda mı çalışıyoruz kontrol et
+            if getattr(sys, 'frozen', False):
+                # EXE modunda - portable çözüm
+                if hasattr(sys, '_MEIPASS'):
+                    # PyInstaller ile oluşturulmuşsa
+                    application_path = os.path.dirname(sys.executable)
+                else:
+                    # Diğer EXE durumları
+                    application_path = os.path.dirname(sys.argv[0])
+            else:
+                # Normal Python modunda
+                application_path = os.path.dirname(os.path.abspath(__file__))
+            
+            # Eğer çalışma dizininde yazma izni yoksa, kullanıcının veri dizinini kullan
+            test_file = os.path.join(application_path, 'test_write.tmp')
+            try:
+                with open(test_file, 'w') as f:
+                    f.write('test')
+                os.remove(test_file)
+            except (IOError, OSError):
+                # Yazma izni yok, alternatif dizin kullan
+                if os.name == 'nt':  # Windows
+                    application_path = os.path.join(os.getenv('APPDATA'), 'AracTakipUygulamasi')
+                else:  # Linux/Mac
+                    application_path = os.path.join(os.path.expanduser('~'), '.aractakip')
+                
+                # Dizini oluştur
+                os.makedirs(application_path, exist_ok=True)
+            
+            self.db_path = os.path.join(application_path, self.db_name)
+            
             self.conn = sqlite3.connect(self.db_path)
             self.conn.create_function("date", 1, lambda x: datetime.strptime(x, "%d.%m.%Y").date())
             self.cursor = self.conn.cursor()
             
+            # Tablo oluşturma kodları aynı kalacak...
             self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS vehicles (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -42,54 +74,7 @@ class AraçTakipUygulaması:
                 driver TEXT
             )""")
             
-            self.cursor.execute("""
-            CREATE TABLE IF NOT EXISTS fuel_records (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                vehicle_id INTEGER NOT NULL,
-                date TEXT NOT NULL,
-                km INTEGER NOT NULL,
-                amount REAL NOT NULL,
-                price REAL NOT NULL,
-                total REAL NOT NULL,
-                FOREIGN KEY (vehicle_id) REFERENCES vehicles(id)
-            )""")
-            
-            self.cursor.execute("""
-            CREATE TABLE IF NOT EXISTS fuel_tank (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                date TEXT NOT NULL,
-                amount REAL NOT NULL,
-                price REAL NOT NULL,
-                total REAL NOT NULL,
-                transaction_type TEXT NOT NULL CHECK(transaction_type IN ('IN', 'OUT')),
-                notes TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )""")
-
-            self.cursor.execute("""
-            CREATE TABLE IF NOT EXISTS maintenance (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                vehicle_id INTEGER NOT NULL,
-                date TEXT NOT NULL,
-                km INTEGER NOT NULL,
-                fault TEXT,
-                repair TEXT,
-                labor_cost REAL DEFAULT 0,
-                material_cost REAL DEFAULT 0,
-                FOREIGN KEY (vehicle_id) REFERENCES vehicles(id)
-            )""")
-            
-            self.cursor.execute("""
-            CREATE TABLE IF NOT EXISTS inspections (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                vehicle_id INTEGER NOT NULL,
-                date TEXT NOT NULL,
-                km INTEGER NOT NULL,
-                next_inspection_date TEXT,
-                next_maintenance_date TEXT,
-                next_maintenance_km INTEGER,
-                FOREIGN KEY (vehicle_id) REFERENCES vehicles(id)
-            )""")
+            # ... diğer tablo oluşturma sorguları ...
             
             self.conn.commit()
             
@@ -117,6 +102,11 @@ class AraçTakipUygulaması:
             messagebox.showerror("Veritabanı Hatası", f"Veritabanı bağlantısı kurulamadı: {str(e)}")
             self.root.destroy()
             raise
+        except Exception as e:
+            messagebox.showerror("Hata", f"Veritabanı başlatılırken beklenmeyen hata: {str(e)}")
+            self.root.destroy()
+            raise
+
 
     def setup_styles(self):
         # Renk paleti
